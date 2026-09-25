@@ -1,0 +1,86 @@
+/**
+ * noai init | seed | add <title> <text> | ask <question> | tape | verify | serve
+ *
+ * The passphrase comes from NOAI_PASSPHRASE. The Nebius key from NEBIUS_API_KEY
+ * (npm scripts load .env, which is gitignored).
+ */
+import { readFile } from 'node:fs/promises';
+import { ask } from './agent.ts';
+import { configFromEnv } from './gate.ts';
+import { noaiHome } from './home.ts';
+import { readLedger, readReceipts, verifyLedger } from './ledger.ts';
+import { addNote, closeVault, createVault, openVault, signerFingerprint } from './vault.ts';
+
+const [cmd, ...args] = process.argv.slice(2);
+const root = noaiHome();
+
+function passphrase(): string {
+  const p = process.env.NOAI_PASSPHRASE;
+  if (!p) throw new Error('Set NOAI_PASSPHRASE to unlock the vault.');
+  return p;
+}
+
+async function main(): Promise<void> {
+  switch (cmd) {
+    case 'init': {
+      const v = await createVault(root, passphrase());
+      console.log(`Vault created at ${v.path}\nDevice key ${signerFingerprint(v.data.device.publicKey)}`);
+      closeVault(v);
+      return;
+    }
+    case 'seed': {
+      const v = await openVault(root, passphrase());
+      const notes = JSON.parse(await readFile(new URL('../demo/notes.json', import.meta.url), 'utf8')) as { title: string; body: string }[];
+      for (const n of notes) await addNote(v, n.title, n.body);
+      console.log(`Sealed ${String(notes.length)} demo notes into the vault.`);
+      closeVault(v);
+      return;
+    }
+    case 'add': {
+      const [title, ...body] = args;
+      if (!title || body.length === 0) throw new Error('Usage: noai add <title> <text>');
+      const v = await openVault(root, passphrase());
+      const n = await addNote(v, title, body.join(' '));
+      console.log(`Sealed note ${n.id}.`);
+      closeVault(v);
+      return;
+    }
+    case 'ask': {
+      const question = args.join(' ');
+      if (!question) throw new Error('Usage: noai ask <question>');
+      const v = await openVault(root, passphrase());
+      const r = await ask(v, configFromEnv(root), question);
+      console.log(`\n${r.answer}\n`);
+      console.log('--- what left this device ---');
+      console.log(r.disclosed);
+      console.log('--- receipt ---');
+      console.log(JSON.stringify(r.signed.receipt, null, 2));
+      console.log(`chain entry ${String(r.entry.seq)}  ${r.entry.entryHash.slice(0, 16)}  ${String(r.ms)} ms`);
+      closeVault(v);
+      return;
+    }
+    case 'tape': {
+      for (const e of await readLedger(root)) {
+        console.log(`#${String(e.seq)}  ${e.at}  ${e.model}  ${String(e.payloadBytes)} B  ${e.entryHash.slice(0, 16)}`);
+      }
+      return;
+    }
+    case 'verify': {
+      const verdict = verifyLedger(await readLedger(root), await readReceipts(root));
+      console.log(`${verdict.valid ? 'VALID' : 'BROKEN'}: ${verdict.reason}`);
+      process.exitCode = verdict.valid ? 0 : 1;
+      return;
+    }
+    case 'serve': {
+      await import('./server.ts');
+      return;
+    }
+    default:
+      console.log('noai init | seed | add <title> <text> | ask <question> | tape | verify | serve');
+  }
+}
+
+main().catch((e: unknown) => {
+  console.error(e instanceof Error ? e.message : e);
+  process.exitCode = 1;
+});

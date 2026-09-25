@@ -141,3 +141,7 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# NOAI local data: the vault, receipts and ledger never go in the repo
+.noai/
+.noai-*/
