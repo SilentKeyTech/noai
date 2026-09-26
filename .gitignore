@@ -154,3 +154,6 @@ web/app/lib/core/
 web/app/vendor/
 web/app/models/
 web/app/demo-notes.json
+
+# Netlify CLI build output
+.netlify/
