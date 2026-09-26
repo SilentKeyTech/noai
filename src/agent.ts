@@ -1,14 +1,77 @@
 /**
- * The agent loop for one question: rank on device, disclose the minimum
- * through the gate, return the answer with its receipt.
+ * The agent loop for one turn: rank on device, disclose the minimum through
+ * the gate, return the answer with its receipt, and keep what should be kept.
+ *
+ * Memory has two routes into the vault, and neither sends the memory anywhere:
+ *   - the owner says "remember that ...": saved on device, no model call at all
+ *   - the model ends a reply with "REMEMBER: ...": rehydrated on device, then
+ *     sealed. The model only ever saw placeholders, so what it asks to keep is
+ *     turned back into the real values here, never on the server.
  */
+import { type Embedder, loadEmbedder } from './embed.ts';
 import { disclose, type GateConfig, type GateResult, type Transport, httpTransport } from './gate.ts';
-import { Bm25Retriever } from './retrieve.ts';
-import { type OpenVault, readNotes } from './vault.ts';
+import { Bm25Retriever, HybridRetriever, type Scored } from './retrieve.ts';
+import type { Note } from './types.ts';
+import { addNote, type OpenVault, readNotes } from './vault.ts';
 
 export interface AskResult extends GateResult {
   candidates: number;
   used: number;
+  /** which ranking chose the passages, so the tape can say so */
+  retriever: 'hybrid' | 'bm25';
+  /** facts the model asked to keep, already sealed into the vault */
+  remembered: Note[];
+}
+
+export interface RememberResult {
+  kind: 'memory';
+  note: Note;
+  /** always zero: saving a memory discloses nothing */
+  bytesSent: 0;
+}
+
+let embedderPromise: Promise<Embedder | null> | null = null;
+
+/** Loaded once per process. Absent model means BM25 alone, which is reported, not hidden. */
+export function sharedEmbedder(): Promise<Embedder | null> {
+  embedderPromise ??= loadEmbedder().catch((e: unknown) => {
+    console.error(`Embedding model not used: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  });
+  return embedderPromise;
+}
+
+const REMEMBER_PREFIX = /^\s*(?:please\s+)?(?:remember|note|don'?t forget|keep in mind)(?:\s+that)?\s*[:,-]?\s+/i;
+
+/** "remember that my GP is now Dr Rana" -> "my GP is now Dr Rana". null if it is a question. */
+export function rememberIntent(text: string): string | null {
+  const m = REMEMBER_PREFIX.exec(text);
+  if (!m) return null;
+  const fact = text.slice(m[0].length).trim();
+  // "remember when Sami's birthday is?" is a question, not something to keep.
+  return fact.length >= 3 && !fact.endsWith('?') ? fact : null;
+}
+
+export async function remember(v: OpenVault, fact: string): Promise<RememberResult> {
+  const clean = fact.replace(/\s+/g, ' ').trim();
+  // The title travels with every disclosed passage, so it stays one word.
+  // Repeating the fact in it would send the fact twice.
+  return { kind: 'memory', note: await addNote(v, 'Memory', clean, 'memory'), bytesSent: 0 };
+}
+
+/** Pull "REMEMBER:" lines out of a rehydrated answer. */
+export function splitMemories(answer: string): { answer: string; facts: string[] } {
+  const facts: string[] = [];
+  const kept = answer
+    .split('\n')
+    .filter((line) => {
+      const m = /^\s*REMEMBER:\s*(.+)$/i.exec(line);
+      if (m?.[1]?.trim()) facts.push(m[1].trim());
+      return !m;
+    })
+    .join('\n')
+    .trim();
+  return { answer: kept, facts };
 }
 
 export async function ask(
@@ -17,13 +80,34 @@ export async function ask(
   question: string,
   k = 3,
   transport: Transport = httpTransport,
+  embedder: Embedder | null | undefined = undefined,
 ): Promise<AskResult> {
-  const retriever = new Bm25Retriever(readNotes(v));
-  const hits = retriever.search(question, k * 2);
+  const notes = readNotes(v);
+  const emb = embedder === undefined ? await sharedEmbedder() : embedder;
+  const hits: Scored[] = emb
+    ? await new HybridRetriever(notes, emb).search(question, k * 2)
+    : new Bm25Retriever(notes).search(question, k * 2);
   // Only passages that score at least a third of the best one go out.
   // Minimal disclosure is the product, not a setting.
   const top = hits[0]?.score ?? 0;
   const chosen = hits.filter((h) => h.score >= top / 3).slice(0, k).map((h) => h.chunk);
   const result = await disclose(v, cfg, question, chosen, transport);
-  return { ...result, candidates: hits.length, used: chosen.length };
+
+  const { answer, facts } = splitMemories(result.answer);
+  const remembered: Note[] = [];
+  for (const f of facts) remembered.push((await remember(v, f)).note);
+  return { ...result, answer, candidates: hits.length, used: chosen.length, retriever: emb ? 'hybrid' : 'bm25', remembered };
+}
+
+/** One turn from the UI or CLI: a memory to keep, or a question to answer. */
+export async function respond(
+  v: OpenVault,
+  cfg: GateConfig,
+  text: string,
+  transport: Transport = httpTransport,
+  embedder?: Embedder | null,
+): Promise<RememberResult | ({ kind: 'answer' } & AskResult)> {
+  const fact = rememberIntent(text);
+  if (fact) return remember(v, fact);
+  return { kind: 'answer', ...(await ask(v, cfg, text, 3, transport, embedder)) };
 }

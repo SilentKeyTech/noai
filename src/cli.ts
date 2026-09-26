@@ -1,11 +1,11 @@
 /**
- * noai init | seed | add <title> <text> | ask <question> | tape | verify | serve
+ * noai init | seed | add <title> <text> | remember <fact> | ask <question> | tape | verify | serve
  *
  * The passphrase comes from NOAI_PASSPHRASE. The Nebius key from NEBIUS_API_KEY
  * (npm scripts load .env, which is gitignored).
  */
 import { readFile } from 'node:fs/promises';
-import { ask } from './agent.ts';
+import { ask, remember } from './agent.ts';
 import { configFromEnv } from './gate.ts';
 import { noaiHome } from './home.ts';
 import { readLedger, readReceipts, verifyLedger } from './ledger.ts';
@@ -45,6 +45,15 @@ async function main(): Promise<void> {
       closeVault(v);
       return;
     }
+    case 'remember': {
+      const fact = args.join(' ');
+      if (!fact) throw new Error('Usage: noai remember <fact>');
+      const v = await openVault(root, passphrase());
+      const r = await remember(v, fact);
+      console.log(`Sealed memory ${r.note.id}. Nothing was sent.`);
+      closeVault(v);
+      return;
+    }
     case 'ask': {
       const question = args.join(' ');
       if (!question) throw new Error('Usage: noai ask <question>');
@@ -55,7 +64,8 @@ async function main(): Promise<void> {
       console.log(r.disclosed);
       console.log('--- receipt ---');
       console.log(JSON.stringify(r.signed.receipt, null, 2));
-      console.log(`chain entry ${String(r.entry.seq)}  ${r.entry.entryHash.slice(0, 16)}  ${String(r.ms)} ms`);
+      console.log(`chain entry ${String(r.entry.seq)}  ${r.entry.entryHash.slice(0, 16)}  ${String(r.ms)} ms  retrieval ${r.retriever}`);
+      for (const m of r.remembered) console.log(`remembered: ${m.body}`);
       closeVault(v);
       return;
     }
@@ -76,7 +86,7 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      console.log('noai init | seed | add <title> <text> | ask <question> | tape | verify | serve');
+      console.log('noai init | seed | add <title> <text> | remember <fact> | ask <question> | tape | verify | serve');
   }
 }
 

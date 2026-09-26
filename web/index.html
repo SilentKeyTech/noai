@@ -31,7 +31,11 @@
   .answer.err { border-color: var(--bad); color: #ffc2c8; }
   .dim { color: var(--dim); font-size: 13px; }
   .notes { list-style: none; padding: 0; margin: 0; }
-  .notes li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .notes li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; display: flex; gap: 8px; align-items: baseline; }
+  .notes li .forget { margin-left: auto; background: none; border: 0; color: var(--dim); font-size: 12px; padding: 0; cursor: pointer; }
+  .notes li .forget:hover { color: var(--bad); }
+  .tag { font: 10px var(--mono); padding: 1px 6px; border-radius: 99px; border: 1px solid rgba(124,196,255,.45); color: var(--accent); }
+  .kept { margin-top: 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(61,220,151,.4); background: rgba(61,220,151,.08); color: var(--ok); font-size: 13px; }
   .verdict { border-radius: 10px; padding: 12px 14px; font-weight: 600; margin-bottom: 14px; }
   .verdict.ok { background: rgba(61,220,151,.12); color: var(--ok); border: 1px solid rgba(61,220,151,.4); }
   .verdict.bad { background: rgba(255,93,108,.14); color: var(--bad); border: 1px solid rgba(255,93,108,.5); }
@@ -64,7 +68,7 @@
     </div>
     <div id="app" class="hidden">
       <h2>Ask</h2>
-      <div class="row"><input id="q" placeholder="When is my brother's birthday, and what's his number?"><button id="ask">Ask</button></div>
+      <div class="row"><input id="q" placeholder="Ask anything, or start with &quot;remember that&quot; to keep a fact"><button id="ask">Ask</button></div>
       <div class="answer" id="answer"><span class="dim">Ranking and redaction happen on this device. Only the smallest set of relevant, redacted passages goes to Nemotron on Nebius Token Factory, and every call gets a signed receipt.</span></div>
       <p class="dim" id="stats"></p>
       <h2 style="margin-top:28px">Vault</h2>
@@ -102,7 +106,8 @@ async function refresh() {
   $('lockhint').textContent = s.exists ? 'Your notes are sealed with AES-256-GCM under a key only this passphrase can open.' : 'No vault yet. The passphrase you choose now creates one.';
   $('lock').classList.toggle('hidden', s.unlocked);
   $('app').classList.toggle('hidden', !s.unlocked);
-  $('notes').innerHTML = s.notes.map((n) => `<li>${esc(n.title)} <span class="dim">· sealed</span></li>`).join('') || '<li class="dim">Empty. Add a note below.</li>';
+  $('meta').textContent += `  ·  retrieval ${s.retriever === 'hybrid' ? 'BM25 + on-device embeddings' : 'BM25'}`;
+  $('notes').innerHTML = s.notes.map((n) => `<li>${n.kind === 'memory' ? '<span class="tag">memory</span>' : ''}<span>${esc(n.title)}</span> <span class="dim">· sealed</span><button class="forget" data-id="${esc(n.id)}">forget</button></li>`).join('') || '<li class="dim">Empty. Add a note below.</li>';
   await drawTape();
 }
 async function drawTape() {
@@ -133,8 +138,15 @@ $('ask').onclick = async () => {
   $('ask').disabled = true; $('answer').className = 'answer'; $('answer').textContent = 'Ranking on device, redacting, sending through the gate…'; $('stats').textContent = '';
   try {
     const r = await api('POST', '/api/ask', { question: q });
-    $('answer').innerHTML = esc(r.answer).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-    $('stats').textContent = `${r.used} passage${r.used === 1 ? '' : 's'} disclosed · receipt #${r.seq} · ${r.ms} ms round trip`;
+    if (r.kind === 'memory') {
+      $('answer').innerHTML = `<div class="kept">Kept in your vault: ${esc(r.fact)}</div>`;
+      $('stats').textContent = '0 bytes sent. Saving a memory never calls the model and writes no receipt, because nothing left.';
+      $('q').value = '';
+    } else {
+      $('answer').innerHTML = esc(r.answer).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') + (r.remembered || []).map((m) => `<div class="kept">Kept in your vault: ${esc(m.fact)}</div>`).join('');
+      $('stats').textContent = `${r.used} passage${r.used === 1 ? '' : 's'} disclosed · chosen by ${r.retriever === 'hybrid' ? 'BM25 + on-device embeddings' : 'BM25'} · receipt #${r.seq} · ${r.ms} ms round trip`;
+    }
+    await refresh();
   } catch (e) { $('answer').className = 'answer err'; $('answer').textContent = e.message; }
   $('ask').disabled = false;
   await drawTape();
@@ -143,6 +155,12 @@ $('q').onkeydown = (e) => { if (e.key === 'Enter') $('ask').click(); };
 $('add').onclick = async () => {
   try { await api('POST', '/api/notes', { title: $('nt').value, text: $('nb').value }); $('nt').value = ''; $('nb').value = ''; await refresh(); }
   catch (e) { alert(e.message); }
+};
+$('notes').onclick = async (e) => {
+  const b = e.target.closest('.forget'); if (!b) return;
+  if (!confirm('Delete this sealed entry from the vault? This cannot be undone.')) return;
+  try { await api('POST', '/api/forget', { id: b.dataset.id }); } catch (err) { alert(err.message); }
+  await refresh();
 };
 $('verify').onclick = drawTape;
 $('tamper').onclick = async () => { try { await api('POST', '/api/tamper'); } catch (e) { alert(e.message); } await drawTape(); };

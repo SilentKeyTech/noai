@@ -6,11 +6,11 @@
 import { existsSync } from 'node:fs';
 import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { ask } from './agent.ts';
+import { respond, sharedEmbedder } from './agent.ts';
 import { configFromEnv, GateRefused } from './gate.ts';
 import { noaiHome } from './home.ts';
 import { ledgerPath, readLedger, readReceipts, verifyLedger } from './ledger.ts';
-import { addNote, createVault, type OpenVault, openVault, readDisclosure, readNotes, signerFingerprint, vaultPathFor } from './vault.ts';
+import { addNote, createVault, forgetNote, type OpenVault, openVault, readDisclosure, readNotes, signerFingerprint, vaultPathFor } from './vault.ts';
 
 const root = noaiHome();
 const port = Number(process.env.NOAI_PORT ?? 7788);
@@ -51,7 +51,8 @@ const routes: Record<string, (req: IncomingMessage, res: ServerResponse) => Prom
       exists: existsSync(vaultPathFor(root)),
       unlocked: !!vault,
       device: vault ? signerFingerprint(vault.data.device.publicKey) : null,
-      notes: vault ? readNotes(vault).map((n) => ({ id: n.id, title: n.title, addedAt: n.addedAt })) : [],
+      notes: vault ? readNotes(vault).map((n) => ({ id: n.id, title: n.kind === 'memory' ? n.body : n.title, addedAt: n.addedAt, kind: n.kind })) : [],
+      retriever: (await sharedEmbedder()) ? 'hybrid' : 'bm25',
       model: configFromEnv(root).model,
       keySet: !!process.env.NEBIUS_API_KEY,
     });
@@ -77,8 +78,23 @@ const routes: Record<string, (req: IncomingMessage, res: ServerResponse) => Prom
     if (!vault) return send(res, 401, { error: 'Locked.' });
     const { question = '' } = await body(req);
     if (!question.trim()) return send(res, 400, { error: 'Ask something.' });
-    const r = await ask(vault, configFromEnv(root), question.trim());
-    send(res, 200, { answer: r.answer, rawAnswer: r.rawAnswer, used: r.used, ms: r.ms, seq: r.entry.seq });
+    const r = await respond(vault, configFromEnv(root), question.trim());
+    if (r.kind === 'memory') return send(res, 200, { kind: 'memory', id: r.note.id, fact: r.note.body, bytesSent: 0 });
+    send(res, 200, {
+      kind: 'answer',
+      answer: r.answer,
+      rawAnswer: r.rawAnswer,
+      used: r.used,
+      ms: r.ms,
+      seq: r.entry.seq,
+      retriever: r.retriever,
+      remembered: r.remembered.map((n) => ({ id: n.id, fact: n.body })),
+    });
+  },
+  'POST /api/forget': async (req, res) => {
+    if (!vault) return send(res, 401, { error: 'Locked.' });
+    const { id = '' } = await body(req);
+    send(res, (await forgetNote(vault, id)) ? 200 : 404, { ok: true });
   },
   'GET /api/tape': async (_q, res) => send(res, 200, await tape()),
   'POST /api/tamper': async (_q, res) => {
@@ -111,4 +127,5 @@ createServer((req, res) => {
   });
 }).listen(port, '127.0.0.1', () => {
   console.log(`NOAI on http://127.0.0.1:${String(port)}  (data in ${root})`);
+  void sharedEmbedder().then((e) => console.log(e ? `Retrieval: BM25 + ${e.name}, on device` : 'Retrieval: BM25 only (run npm run model for on-device embeddings)'));
 });

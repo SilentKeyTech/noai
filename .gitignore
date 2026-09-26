@@ -145,3 +145,6 @@ vite.config.ts.timestamp-*
 # NOAI local data: the vault, receipts and ledger never go in the repo
 .noai/
 .noai-*/
+
+# On-device embedding model, fetched by npm run model and checked against its pinned hash
+models/

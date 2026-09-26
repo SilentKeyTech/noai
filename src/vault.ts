@@ -89,9 +89,9 @@ export async function writeVault(v: OpenVault): Promise<void> {
 }
 
 /** The note id is bound in as AAD, so a sealed note cannot be swapped under another id. */
-export async function addNote(v: OpenVault, title: string, body: string): Promise<Note> {
-  const note: Note = { id: newId(), title, body, addedAt: new Date().toISOString() };
-  const plain = Buffer.from(JSON.stringify({ title, body }), 'utf8');
+export async function addNote(v: OpenVault, title: string, body: string, kind: 'note' | 'memory' = 'note'): Promise<Note> {
+  const note: Note = { id: newId(), title, body, addedAt: new Date().toISOString(), kind };
+  const plain = Buffer.from(JSON.stringify({ title, body, kind }), 'utf8');
   v.data.notes[note.id] = {
     id: note.id,
     sealed: seal(v.masterKey, plain, Buffer.from(note.id, 'utf8')),
@@ -104,11 +104,19 @@ export async function addNote(v: OpenVault, title: string, body: string): Promis
 
 export function readNotes(v: OpenVault): Note[] {
   return Object.values(v.data.notes).map((s) => {
-    const { title, body } = JSON.parse(
+    const { title, body, kind } = JSON.parse(
       unseal(v.masterKey, s.sealed, Buffer.from(s.id, 'utf8')).toString('utf8'),
-    ) as { title: string; body: string };
-    return { id: s.id, title, body, addedAt: s.addedAt };
+    ) as { title: string; body: string; kind?: 'note' | 'memory' };
+    return { id: s.id, title, body, addedAt: s.addedAt, kind: kind ?? 'note' };
   });
+}
+
+/** Forgetting is a real delete of the sealed entry, not a flag. */
+export async function forgetNote(v: OpenVault, id: string): Promise<boolean> {
+  if (!v.data.notes[id]) return false;
+  delete v.data.notes[id];
+  await writeVault(v);
+  return true;
 }
 
 export async function storeDisclosure(v: OpenVault, receiptId: string, text: string): Promise<void> {

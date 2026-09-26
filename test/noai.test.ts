@@ -12,6 +12,10 @@ import { redact, rehydrate } from '../src/redact.ts';
 import { Bm25Retriever, chunkNote } from '../src/retrieve.ts';
 import { addNote, createVault, openVault, readDisclosure, readNotes } from '../src/vault.ts';
 
+// These tests pin BM25 so their disclosure assertions do not depend on whether
+// the embedding model is installed. test/memory.test.ts covers the hybrid path.
+process.env.NOAI_MODEL_DIR = join(tmpdir(), 'noai-no-model-here');
+
 const dirs: string[] = [];
 async function tmp(): Promise<string> {
   const d = await mkdtemp(join(tmpdir(), 'noai-'));

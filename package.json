@@ -1,6 +1,6 @@
 {
   "name": "noai",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "NOAI, pronounced No Eye. A personal AI that answers questions about your life without the model ever seeing it.",
   "license": "Apache-2.0",
@@ -9,8 +9,12 @@
   "scripts": {
     "noai": "node --env-file-if-exists=.env src/cli.ts",
     "serve": "node --env-file-if-exists=.env src/server.ts",
+    "model": "node scripts/fetch-model.ts",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "onnxruntime-web": "1.20.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

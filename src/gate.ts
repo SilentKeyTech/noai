@@ -65,6 +65,7 @@ const SYSTEM = [
   'Answer from the passages only. If they do not contain the answer, say so plainly.',
   'Values like [EMAIL_1] or [PHONE_2] are placeholders for redacted data. Use them exactly as written, never guess what they stand for.',
   'Be brief. Cite passages as [P1], [P2].',
+  'If the question itself tells you a new lasting fact about the owner (a new doctor, a changed date, a new number), end with one extra line of the form "REMEMBER: <the fact as one sentence>", keeping any placeholders exactly as written. Never add that line for facts already in the passages, and never for anything you inferred.',
 ].join(' ');
 
 export function buildPrompt(question: string, passages: { title: string; text: string }[]): string {

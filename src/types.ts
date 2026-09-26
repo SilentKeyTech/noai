@@ -28,6 +28,8 @@ export interface Note {
   title: string;
   body: string;
   addedAt: string;
+  /** 'memory' is a fact saved from a conversation. Kept inside the seal, like the title. */
+  kind?: 'note' | 'memory';
 }
 
 export interface SealedNote {

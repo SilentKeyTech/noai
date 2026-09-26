@@ -2,11 +2,12 @@
  * On-device retrieval. The question and the corpus are ranked here, in this
  * process, and nothing about either is sent anywhere to do it.
  *
- * This is BM25 over passages, zero dependencies. The Retriever interface is the
- * seam where a local neural embedder (WASM, still on device) plugs in later.
- * What NOAI never does is call a hosted embedding endpoint: sending the corpus
- * out to be embedded would disclose all of it, which defeats the product.
+ * BM25 over passages, fused with a local neural embedder running as WASM in
+ * this process (embed.ts). What NOAI never does is call a hosted embedding
+ * endpoint: sending the corpus out to be embedded would disclose all of it,
+ * which defeats the product.
  */
+import { cosine, type Embedder } from './embed.ts';
 import type { Chunk, Note } from './types.ts';
 
 export interface Scored {
@@ -76,7 +77,19 @@ export class Bm25Retriever implements Retriever {
     this.avgLen = this.docs.reduce((s, d) => s + d.len, 0) / Math.max(1, this.docs.length);
   }
 
+  get chunks(): Chunk[] {
+    return this.docs.map((d) => d.chunk);
+  }
+
   search(question: string, k: number): Scored[] {
+    return this.scoreAll(question)
+      .filter((s) => s.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, k);
+  }
+
+  /** Every passage with its BM25 score, in corpus order, zeros included. */
+  scoreAll(question: string): Scored[] {
     const q = [...new Set(tokens(question))];
     const n = this.docs.length;
     return this.docs
@@ -90,6 +103,45 @@ export class Bm25Retriever implements Retriever {
           score += (idf * f * (this.k1 + 1)) / (f + this.k1 * (1 - this.b + (this.b * d.len) / this.avgLen));
         }
         return { chunk: d.chunk, score };
+      });
+  }
+}
+
+/**
+ * BM25 and on-device embeddings, fused. BM25 alone misses "doctor" against a
+ * note that says "GP". Embeddings alone ranked the lease renewal above the rent
+ * for "when do I pay the landlord". Together they get both.
+ *
+ * Each signal is scaled to 0..1 against its own best passage, then averaged.
+ * Cosine below FLOOR counts as no match, so an unrelated note never rides along
+ * on a weak semantic resemblance. What the fused score feeds is disclosure, so
+ * the floor errs towards sending less.
+ */
+export const COSINE_FLOOR = 0.2;
+
+export class HybridRetriever {
+  private readonly bm25: Bm25Retriever;
+  private readonly embedder: Embedder;
+  private vectors: Float32Array[] | null = null;
+
+  constructor(notes: Note[], embedder: Embedder) {
+    this.bm25 = new Bm25Retriever(notes);
+    this.embedder = embedder;
+  }
+
+  async search(question: string, k: number): Promise<Scored[]> {
+    const chunks = this.bm25.chunks;
+    this.vectors ??= await Promise.all(chunks.map((c) => this.embedder.embed(`${c.title}. ${c.text}`)));
+    const q = await this.embedder.embed(question);
+    const bm = this.bm25.scoreAll(question).map((s) => s.score);
+    const cos = this.vectors.map((v) => cosine(q, v));
+    const maxBm = Math.max(0, ...bm);
+    const maxCos = Math.max(COSINE_FLOOR, ...cos);
+    return chunks
+      .map((chunk, i) => {
+        const b = maxBm > 0 ? (bm[i] as number) / maxBm : 0;
+        const c = maxCos > COSINE_FLOOR ? Math.max(0, (cos[i] as number) - COSINE_FLOOR) / (maxCos - COSINE_FLOOR) : 0;
+        return { chunk, score: (b + c) / 2 };
       })
       .filter((s) => s.score > 0)
       .sort((a, b) => b.score - a.score)

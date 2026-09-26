@@ -13,7 +13,7 @@ A personal assistant is only useful if it knows your life: your health notes, yo
 ```
  your notes ──► sealed vault (AES-256-GCM, key from your passphrase, on device)
                       │
- question ──► on-device retrieval (BM25, no hosted embeddings)
+ question ──► on-device retrieval (BM25 + MiniLM embeddings as WASM, nothing hosted)
                       │  picks the smallest set of relevant passages
                       ▼
                EGRESS GATE  (src/gate.ts, the only file allowed to use the network)
@@ -30,6 +30,12 @@ A personal assistant is only useful if it knows your life: your health notes, yo
 
 The demo is a split screen. On the left, you ask and get an answer. On the right, a live receipt tape shows every disclosure: how many bytes left, which passages, what was redacted, and exactly what the model saw. Press **Tamper with the log** and chain verification turns red, naming the entry that was edited.
 
+## Memory
+
+Start a message with "remember that" and NOAI keeps the fact in the sealed vault. That never calls the model, so it writes no receipt: nothing left.
+
+The model can also keep things. If your question tells it something new ("Sami has a new number now, ..."), it ends its reply with a `REMEMBER:` line. It only ever saw `[PHONE_1]`, so the device swaps the real number back in before sealing the memory. Every memory shows in the vault list and can be forgotten, which deletes the sealed entry rather than hiding it.
+
 ## What is proven, and what is not
 
 Proven by the code and the tests:
@@ -40,21 +46,27 @@ Proven by the code and the tests:
 - Redacted values never appear in the outbound body (same test).
 - Editing or deleting any ledger entry breaks verification at that entry (tests: `the ledger`).
 - Verification needs only `receipts.jsonl` and `ledger.jsonl`. No vault, no account, no network.
+- Retrieval understands meaning, on device: "who is my doctor?" finds the note that says GP, which BM25 alone misses (test: `hybrid finds the GP for "doctor", and sends nothing from other notes`).
+- The embedding model is checked against a pinned SHA-256 before it runs, and refused if it does not match (test: `refuses a model file that does not match its pinned hash`).
+- Saving a memory sends nothing and writes no receipt (test: `saving a memory sends nothing, writes no ledger entry, and seals it`).
+- When the model asks to remember something, it only ever saw placeholders. The real values are put back and sealed on device (test: `keeps what the model asks to remember, with the real values put back on device`).
 
 Not proven, stated plainly:
 
 - A receipt is a signed statement by your device. It proves what your device sent and that the record was not altered afterwards. It cannot prove what the provider does with a request once it arrives.
+- Semantic retrieval is looser than keyword retrieval. Asked "who is my doctor?", the demo sends the GP line, the dentist memory and the allergy line from the same health note. Nothing from money, family or travel goes out, but the allergy line is a near miss the tape shows plainly.
 - The redactor is pattern based. It catches structured identifiers (emails, phone numbers, IBANs, card numbers, API keys, IP addresses), not names or free text. The passages it sends are the minimum needed, and the tape shows every word of them.
 
 ## Run it
 
-Requires Node 22.18 or later. No runtime dependencies.
+Requires Node 22.18 or later. One runtime dependency, onnxruntime-web, which runs the embedding model as WebAssembly with no native code. Without the model NOAI falls back to BM25 alone and says so.
 
 ```bash
 git clone https://github.com/SilentKeyTech/noai && cd noai
-npm install                     # dev only: typescript and @types/node
+npm install                     # onnxruntime-web, plus typescript for dev
+npm run model                   # one time: fetch the 23 MB embedding model, hash checked
 echo NEBIUS_API_KEY=your_key > .env
-npm test                        # 13 tests, no network
+npm test                        # 25 tests, no network
 npm run serve                   # http://127.0.0.1:7788
 ```
 
