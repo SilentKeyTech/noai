@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="1">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,8 +12,8 @@
     --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
     --mono: "Cascadia Mono", ui-monospace, Consolas, monospace;
   }
-  /* 1 · Orange glass */
-  [data-theme="1"] {
+  /* Auto: orange, following the device. No attribute and no script needed. */
+  :root:not([data-theme]), :root[data-theme="orange-dark"] {
     --page: radial-gradient(620px 520px at 8% 8%, #FFB54D 0%, rgba(255,181,77,0) 70%), radial-gradient(760px 560px at 78% 0%, #FF6400 0%, rgba(255,100,0,0) 70%), radial-gradient(620px 520px at 96% 96%, #D03400 0%, rgba(208,52,0,0) 70%), radial-gradient(680px 540px at 24% 104%, #FF8A1F 0%, rgba(255,138,31,0) 70%), #F25C05;
     --ink: #0A0A0A; --ink2: rgba(10,10,10,.76); --ink3: rgba(10,10,10,.64); --rule: rgba(10,10,10,.16);
     --glass: linear-gradient(135deg, rgba(255,255,255,.30) 0%, rgba(255,255,255,.12) 42%, rgba(255,255,255,.08) 100%);
@@ -27,9 +27,27 @@
     --tamper: #0A0A0A; --tamper-edge: #0A0A0A; --tamper-ink: #FFB27A; --dot: #0A0A0A;
     --pre: rgba(14,10,8,.84); --pre-edge: rgba(0,0,0,.6); --pre-ink: #FFB27A; --ph: #FF7A1A; --ph-ink: #0A0A0A;
     --tag-edge: #0A0A0A; --tag-ink: #0A0A0A; --kept: rgba(10,10,10,.86); --kept-ink: #7DFFD0; --focus: #0A0A0A;
+    color-scheme: dark;
   }
-  /* 2 · Orange glass, light */
-  [data-theme="2"] {
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      --page: radial-gradient(620px 520px at 6% 8%, #FFD2A1 0%, rgba(255,210,161,0) 70%), radial-gradient(760px 560px at 76% 2%, #FFB070 0%, rgba(255,176,112,0) 70%), radial-gradient(560px 460px at 96% 96%, #FF9A4D 0%, rgba(255,154,77,0) 70%), radial-gradient(680px 540px at 26% 104%, #FFE0C0 0%, rgba(255,224,192,0) 70%), #FFEBD8;
+      --ink: #1A1410; --ink2: rgba(26,20,16,.74); --ink3: rgba(26,20,16,.62); --rule: rgba(26,20,16,.12);
+      --glass: linear-gradient(135deg, rgba(255,255,255,.72) 0%, rgba(255,255,255,.42) 45%, rgba(255,255,255,.30) 100%);
+      --glass-edge: rgba(255,255,255,.95); --glass-shadow: 0 26px 60px rgba(160,60,0,.16); --sheen: rgba(255,255,255,.55); --glass-inset: #FFFFFF;
+      --sub: rgba(255,255,255,.50); --sub-edge: rgba(255,255,255,.95); --answer: rgba(255,255,255,.66);
+      --field: rgba(255,255,255,.84); --field-edge: rgba(26,20,16,.16); --field-ink: #1A1410;
+      --btn: #2E2E34; --btn-ink: #FFB27A; --btn-shadow: 0 6px 16px rgba(26,20,16,.22);
+      --ghost: rgba(255,255,255,.62); --ghost-edge: rgba(26,20,16,.16); --lbl: #1A1410; --link: #9A3412;
+      --chip-edge: rgba(26,20,16,.18); --chip-ink: #2A221C; --red: #2E2E34; --red-ink: #FFB27A;
+      --ok: #2E2E34; --ok-edge: #2E2E34; --ok-ink: #7DFFD0; --bad: #2E2E34; --bad-edge: #2E2E34; --bad-ink: #FF8A95;
+      --tamper: #2E2E34; --tamper-edge: #2E2E34; --tamper-ink: #FFB27A; --dot: #2E2E34;
+      --pre: rgba(255,255,255,.84); --pre-edge: rgba(26,20,16,.16); --pre-ink: #1A1410; --ph: #2E2E34; --ph-ink: #FFB27A;
+      --tag-edge: #1A1410; --tag-ink: #1A1410; --kept: #2E2E34; --kept-ink: #7DFFD0; --focus: #9A3412;
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="orange-light"] {
     --page: radial-gradient(620px 520px at 6% 8%, #FFD2A1 0%, rgba(255,210,161,0) 70%), radial-gradient(760px 560px at 76% 2%, #FFB070 0%, rgba(255,176,112,0) 70%), radial-gradient(560px 460px at 96% 96%, #FF9A4D 0%, rgba(255,154,77,0) 70%), radial-gradient(680px 540px at 26% 104%, #FFE0C0 0%, rgba(255,224,192,0) 70%), #FFEBD8;
     --ink: #1A1410; --ink2: rgba(26,20,16,.74); --ink3: rgba(26,20,16,.62); --rule: rgba(26,20,16,.12);
     --glass: linear-gradient(135deg, rgba(255,255,255,.72) 0%, rgba(255,255,255,.42) 45%, rgba(255,255,255,.30) 100%);
@@ -43,9 +61,9 @@
     --tamper: #2E2E34; --tamper-edge: #2E2E34; --tamper-ink: #FFB27A; --dot: #2E2E34;
     --pre: rgba(255,255,255,.84); --pre-edge: rgba(26,20,16,.16); --pre-ink: #1A1410; --ph: #2E2E34; --ph-ink: #FFB27A;
     --tag-edge: #1A1410; --tag-ink: #1A1410; --kept: #2E2E34; --kept-ink: #7DFFD0; --focus: #9A3412;
+    color-scheme: light;
   }
-  /* 3 · Purple glass, light */
-  [data-theme="3"] {
+  :root[data-theme="purple-light"] {
     --page: radial-gradient(620px 520px at 6% 8%, #C9B6FF 0%, rgba(201,182,255,0) 70%), radial-gradient(760px 560px at 76% 2%, #B79BFF 0%, rgba(183,155,255,0) 70%), radial-gradient(540px 440px at 96% 96%, rgba(255,176,120,.7) 0%, rgba(255,176,120,0) 70%), radial-gradient(680px 540px at 26% 104%, #D9C8FF 0%, rgba(217,200,255,0) 70%), #EEE8FF;
     --ink: #1B1033; --ink2: rgba(27,16,51,.74); --ink3: rgba(27,16,51,.62); --rule: rgba(27,16,51,.12);
     --glass: linear-gradient(135deg, rgba(255,255,255,.72) 0%, rgba(255,255,255,.42) 45%, rgba(255,255,255,.30) 100%);
@@ -59,9 +77,9 @@
     --tamper: rgba(255,122,26,.10); --tamper-edge: #C2410C; --tamper-ink: #A8380A; --dot: #059669;
     --pre: rgba(255,255,255,.82); --pre-edge: rgba(109,63,209,.28); --pre-ink: #1B1033; --ph: #FF7A1A; --ph-ink: #1B1033;
     --tag-edge: #C2410C; --tag-ink: #A8380A; --kept: rgba(16,185,129,.12); --kept-ink: #046C4E; --focus: #6D3FD1;
+    color-scheme: light;
   }
-  /* 4 · Purple satin, dark */
-  [data-theme="4"] {
+  :root[data-theme="purple-dark"] {
     --page: radial-gradient(900px 620px at 8% -6%, #4A2799 0%, rgba(74,39,153,0) 70%), radial-gradient(820px 600px at 92% 8%, #33197A 0%, rgba(51,25,122,0) 70%), radial-gradient(900px 600px at 50% 110%, #24105A 0%, rgba(36,16,90,0) 70%), #130A2C;
     --ink: #FFFFFF; --ink2: rgba(255,255,255,.78); --ink3: rgba(255,255,255,.62); --rule: rgba(255,255,255,.12);
     --glass: rgba(255,255,255,.055);
@@ -75,9 +93,9 @@
     --tamper: rgba(201,184,255,.10); --tamper-edge: #C9B8FF; --tamper-ink: #EDE7FF; --dot: #86EFC4;
     --pre: rgba(10,4,28,.45); --pre-edge: rgba(255,255,255,.14); --pre-ink: rgba(255,255,255,.92); --ph: #C9B8FF; --ph-ink: #1A0E3A;
     --tag-edge: #C9B8FF; --tag-ink: #DDD3FF; --kept: rgba(134,239,196,.08); --kept-ink: #86EFC4; --focus: #C9B8FF;
+    color-scheme: dark;
   }
-  /* 5 · Sky glass, light */
-  [data-theme="5"] {
+  :root[data-theme="sky"] {
     --page: radial-gradient(620px 520px at 6% 8%, #A9DDFF 0%, rgba(169,221,255,0) 70%), radial-gradient(760px 560px at 76% 2%, #8FD0FF 0%, rgba(143,208,255,0) 70%), radial-gradient(560px 460px at 96% 96%, #BBB0FF 0%, rgba(187,176,255,0) 70%), radial-gradient(680px 540px at 26% 104%, #C8ECFF 0%, rgba(200,236,255,0) 70%), #E2F4FF;
     --ink: #0E1A2B; --ink2: rgba(14,26,43,.74); --ink3: rgba(14,26,43,.62); --rule: rgba(14,26,43,.12);
     --glass: linear-gradient(135deg, rgba(255,255,255,.72) 0%, rgba(255,255,255,.42) 45%, rgba(255,255,255,.30) 100%);
@@ -91,6 +109,7 @@
     --tamper: #33363F; --tamper-edge: #33363F; --tamper-ink: #FFFFFF; --dot: #33363F;
     --pre: rgba(255,255,255,.84); --pre-edge: rgba(14,26,43,.16); --pre-ink: #0E1A2B; --ph: #6A4BC4; --ph-ink: #FFFFFF;
     --tag-edge: #4B2FA6; --tag-ink: #4B2FA6; --kept: #33363F; --kept-ink: #7DFFD0; --focus: #6A4BC4;
+    color-scheme: light;
   }
 
   * { box-sizing: border-box; }
@@ -112,10 +131,31 @@
   header h1 svg { width: 57px; height: 24px; }
   .say { font: 10.5px var(--mono); letter-spacing: .18em; color: var(--ink2); text-transform: uppercase; }
   .pill { margin-left: auto; padding: 9px 14px; border-radius: 999px; background: var(--ghost); border: 1px solid var(--rule); font: 11.5px var(--mono); color: var(--ink2); }
-  .themes { display: flex; align-items: center; gap: 6px; font: 11px var(--mono); color: var(--ink2); }
-  .themes button { width: 30px; height: 30px; padding: 0; border-radius: 999px; border: 1px solid var(--ghost-edge); background: var(--ghost); color: var(--ink); font: 700 12px var(--mono); cursor: pointer; }
-  .themes button[aria-pressed="true"] { background: var(--ink); color: var(--glass-inset); border-color: var(--ink); }
-  [data-theme="4"] .themes button[aria-pressed="true"] { color: #130A2C; }
+  .themes { display: flex; align-items: center; gap: 0; border: 0; margin: 0; padding: 0; min-width: 0; }
+  .themes legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .themes button { width: 44px; height: 44px; padding: 8px; border: 0; background: none; cursor: pointer; border-radius: 999px; }
+  .themes button span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 999px; border: 1px solid rgba(0,0,0,.25); font: 700 10px var(--mono); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .themes button[aria-pressed="true"] span { box-shadow: 0 0 0 2px var(--ink); }
+  .sw-auto { background: linear-gradient(135deg, #F25C05 50%, #FFEBD8 50%); }
+  .sw-orange-dark { background: #F25C05; }
+  .sw-orange-light { background: #FFD2A1; }
+  .sw-purple-dark { background: #130A2C; }
+  .sw-purple-light { background: #C9B6FF; }
+  .sw-sky { background: #A9DDFF; }
+  .flabel { display: block; font: 700 11px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink2); margin: 0 0 6px; }
+  .tabnum { font-variant-numeric: tabular-nums; }
+  .modelload { display: flex; flex-direction: column; gap: 6px; font: 12px var(--mono); color: var(--ink2); transition: opacity .6s; }
+  .modelload progress { width: 100%; height: 4px; appearance: none; -webkit-appearance: none; border: 0; border-radius: 99px; background: var(--rule); overflow: hidden; }
+  .modelload progress::-webkit-progress-bar { background: var(--rule); }
+  .modelload progress::-webkit-progress-value { background: var(--ink); }
+  .modelload progress::-moz-progress-bar { background: var(--ink); }
+  .modelload.done progress { display: none; }
+  .modelload.gone { opacity: 0; }
+  .skills { display: flex; flex-wrap: wrap; gap: 8px; }
+  .skills button { min-height: 36px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--ghost-edge); background: var(--ghost); color: var(--ink); font: 600 12.5px var(--font); cursor: pointer; }
+  .notes li.rem .when { font: 700 11px var(--mono); padding: 3px 8px; border-radius: 99px; background: var(--ink); color: var(--glass-inset); flex-shrink: 0; }
+  .stamp { font-weight: 800; letter-spacing: .08em; margin-right: 8px; }
+  .fell { font-weight: 700; }
 
   main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 584px); gap: 24px; align-items: start; }
   .col { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
@@ -186,9 +226,17 @@
   .ph { background: var(--ph); color: var(--ph-ink); padding: 2px 7px; border-radius: 5px; font-weight: 700; }
   .hash { margin: 10px 0 0; font: 11px var(--mono); color: var(--ink3); word-break: break-all; }
   .note { margin: 0; padding-top: 14px; border-top: 1px solid var(--rule); font-size: 12px; line-height: 1.55; color: var(--ink2); }
+  #ask:disabled { cursor: progress; }
+  .kept::before { content: "\2713  "; }
+  .notes li.empty { border-style: dashed; background: transparent; }
+  #tape:empty::before { content: "Receipts land here, one per question."; display: block; padding: 18px 0 6px 26px; color: var(--ink3); font-size: 13px; background: radial-gradient(circle at 5px 27px, transparent 3px, var(--dot) 3.5px, var(--dot) 5px, transparent 5.5px) no-repeat; }
+  .card.broken .top::after { content: "CHAIN BREAKS HERE"; flex-basis: 100%; font: 700 10.5px var(--mono); letter-spacing: .16em; }
+  .link.broken .rail::before { border-radius: 2px; }
+  mark.ph { font: inherit; font-weight: 700; }
   .hidden { display: none !important; }
 
   @media (max-width: 1080px) { main { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 860px) { .themes { width: 100%; order: 10; flex-wrap: wrap; } }
   @media (max-width: 640px) {
     .shell { padding: 12px 12px 20px; gap: 16px; }
     section.glass { padding: 20px 18px; }
@@ -208,17 +256,18 @@
     <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path fill-rule="evenodd" d="M16 2a14 14 0 1 0 0 28a14 14 0 1 0 0-28Zm0 3.4a10.6 10.6 0 1 1 0 21.2a10.6 10.6 0 1 1 0-21.2Z" fill="currentColor"/><path d="M6.85 15A9.2 9.2 0 0 1 25.15 15Q16 25 6.85 15Z" fill="currentColor"/></svg>
     <h1><svg viewBox="0 0 75 32" role="img" aria-label="NOAI"><g fill="currentColor"><path d="M1 26.5V5.5H3.9L15.4 22.63V5.5H18V26.5H15.1L3.6 9.37V26.5Z"/><path fill-rule="evenodd" d="M33 5.25a10.75 10.75 0 1 0 0 21.5a10.75 10.75 0 1 0 0-21.5Zm0 2.6a8.15 8.15 0 1 1 0 16.3a8.15 8.15 0 1 1 0-16.3Z"/><path d="M25.9 15.2A7.15 7.15 0 0 1 40.1 15.2Q33 22.8 25.9 15.2Z"/><path fill-rule="evenodd" d="M48 26.5 55.6 5.5H58.4L66 26.5H63.2L61.28 21.2H52.72L50.8 26.5ZM57 9.37 53.66 18.6H60.34Z"/><rect x="70.5" y="5.5" width="2.6" height="21"/></g></svg></h1>
     <span class="say">Pronounced No Eye</span>
+    <fieldset class="themes" id="themes"><legend>Colour theme</legend></fieldset>
     <span class="pill" id="meta"></span>
-    <div class="themes" id="themes" role="group" aria-label="Colour theme"><span>Theme</span></div>
   </header>
 
   <main>
     <div class="col">
       <section class="glass" id="lock">
-        <div class="head"><h2 class="lbl">Your vault</h2><span class="aside">A personal AI that answers from your notes. The model never sees your life.</span></div>
-        <p class="dim" id="lockhint">Checking this browser for a vault...</p>
+        <div class="head"><h2 class="lbl">Your vault</h2></div>
+        <p class="big" style="margin:0">NOAI answers questions about your notes. The notes stay sealed in this browser, and the model only sees the few redacted lines the receipt tape shows you.</p>
+        <label class="flabel" for="pass">Passphrase</label>
+        <p class="dim tabnum" id="lockhint" aria-live="polite">Checking this browser for a vault...</p>
         <div class="field">
-          <label class="sr" for="pass">Passphrase</label>
           <input id="pass" type="password" placeholder="Passphrase" autocomplete="current-password">
           <button class="primary" id="unlock">Unlock</button>
         </div>
@@ -229,12 +278,14 @@
       <div id="app" class="col hidden">
         <section class="glass">
           <div class="head"><label class="lbl" for="q">Ask your vault</label><span class="aside">Sealed with AES-256-GCM in this browser. Only what the tape shows leaves it.</span></div>
+          <div class="modelload" id="modelload" role="status" aria-live="polite"><span id="modeltext">Loading the on-device search model, about 34 MB with its runtime. It never leaves this tab.</span><progress id="modelbar" max="100"></progress></div>
           <div class="field">
             <input id="q" placeholder="Ask anything, or start with &quot;remember that&quot; to keep a fact">
             <button class="primary" id="ask">Ask</button>
           </div>
+          <div class="skills" id="skills" role="group" aria-label="Skills"></div>
           <div class="answer" id="answer" aria-live="polite"><span class="dim">Ranking and redaction happen in this tab. Only the smallest set of relevant, redacted passages goes to NVIDIA Nemotron 3 Super on Nebius Token Factory, and every call gets a signed receipt.</span></div>
-          <p class="stats" id="stats"></p>
+          <p class="stats" id="stats" aria-live="polite"></p>
         </section>
 
         <section class="glass">
@@ -243,8 +294,8 @@
           <div class="foot">
             <details><summary>+ Add a note</summary>
               <div class="stack">
-                <label class="sr" for="nt">Title</label><input class="plain" id="nt" placeholder="Title">
-                <label class="sr" for="nb">Note</label><textarea class="plain" id="nb" placeholder="Anything private. It is sealed before it touches storage."></textarea>
+                <label class="flabel" for="nt">Title</label><input class="plain" id="nt" placeholder="Title">
+                <label class="flabel" for="nb">Note</label><textarea class="plain" id="nb" placeholder="Anything private. It is sealed before it touches storage."></textarea>
                 <div class="row"><button class="ghost" id="add">Seal note</button></div>
               </div>
             </details>
@@ -263,6 +314,7 @@
       <div class="row">
         <button class="ghost" id="verify">Verify chain</button>
         <button class="ghost tamper" id="tamper">Tamper with the log</button>
+        <button class="ghost tamper" id="delreceipt">Delete a receipt</button>
         <button class="ghost" id="restore">Restore</button>
         <button class="ghost" id="export">Download receipts</button>
       </div>

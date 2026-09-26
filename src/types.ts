@@ -23,13 +23,16 @@ export interface KdfParams {
   keyLength: number;
 }
 
+/** A 'memory' is a fact kept from a conversation; a 'reminder' carries its due date as the title. */
+export type NoteKind = 'note' | 'memory' | 'reminder';
+
 export interface Note {
   id: string;
   title: string;
   body: string;
   addedAt: string;
   /** 'memory' is a fact saved from a conversation. Kept inside the seal, like the title. */
-  kind?: 'note' | 'memory';
+  kind?: NoteKind;
 }
 
 export interface SealedNote {
@@ -84,6 +87,8 @@ export interface DisclosureReceipt {
   responseHash: string;
   usage: { promptTokens: number; completionTokens: number } | null;
   signer: string;
+  /** set only when the bytes left but no answer came back: 'timeout' or 'error'. An unanswered disclosure is still a disclosure. */
+  outcome?: 'timeout' | 'error';
 }
 
 export interface SignedDisclosure {

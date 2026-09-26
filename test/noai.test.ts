@@ -66,6 +66,12 @@ describe('redaction', () => {
     const r = redact('Rent is 850 USD on the 3rd. Review on 30 October 2026.');
     assert.deepEqual(r.counts, {});
   });
+
+  it('leaves digit dates alone, which look like phone numbers but are not', () => {
+    const r = redact('Appointment on 2026-10-12, renewal 12/10/2026, check 12.10.2026, call +961 1 345 678.');
+    assert.deepEqual(r.counts, { PHONE: 1 });
+    assert.ok(r.text.includes('2026-10-12') && r.text.includes('12/10/2026') && r.text.includes('12.10.2026'));
+  });
 });
 
 describe('retrieval runs on device', () => {

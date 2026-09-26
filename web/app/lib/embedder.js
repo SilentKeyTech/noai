@@ -21,15 +21,44 @@ export const MODEL = {
 
 const base = new URL('../', import.meta.url);
 
-async function asset(path) {
+/** GET one of the model's own files from this origin, reporting bytes as they arrive. */
+async function asset(path, onBytes = () => {}) {
   const res = await fetch(new URL(path, base));
   if (!res.ok) return null;
-  return new Uint8Array(await res.arrayBuffer());
+  const total = Number(res.headers.get('content-length')) || 0;
+  if (!res.body?.getReader) {
+    const b = new Uint8Array(await res.arrayBuffer());
+    onBytes(b.length, total || b.length);
+    return b;
+  }
+  const reader = res.body.getReader();
+  const parts = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    got += value.length;
+    onBytes(got, total);
+  }
+  const out = new Uint8Array(got);
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
 }
 
-/** null when the model is not deployed, so the page falls back to BM25 and says so. */
-export async function loadEmbedder() {
-  const [onnx, vocabBytes] = await Promise.all([asset(`models/${MODEL.onnx}`), asset(`models/${MODEL.vocab}`)]);
+/**
+ * null when the model is not deployed, so the page falls back to BM25 and says so.
+ * onProgress(fraction 0..1) follows the model file, which is most of the download.
+ */
+export async function loadEmbedder(onProgress = () => {}) {
+  const [onnx, vocabBytes] = await Promise.all([
+    asset(`models/${MODEL.onnx}`, (got, total) => onProgress(total ? Math.min(1, got / total) : 0)),
+    asset(`models/${MODEL.vocab}`),
+  ]);
   if (!onnx || !vocabBytes) return null;
   if (sha256(onnx) !== MODEL.onnxSha256 || sha256(vocabBytes) !== MODEL.vocabSha256) {
     throw new Error('The embedding model served to this page does not match its pinned SHA-256. Refusing to run it.');

@@ -19,7 +19,7 @@ import {
   sha256,
   unb64,
 } from './crypto.ts';
-import type { Note, Sealed, Vault } from './types.ts';
+import type { Note, NoteKind, Sealed, Vault } from './types.ts';
 
 const CHECK_PHRASE = 'noai.vault.unlocked';
 
@@ -89,7 +89,7 @@ export async function writeVault(v: OpenVault): Promise<void> {
 }
 
 /** The note id is bound in as AAD, so a sealed note cannot be swapped under another id. */
-export async function addNote(v: OpenVault, title: string, body: string, kind: 'note' | 'memory' = 'note'): Promise<Note> {
+export async function addNote(v: OpenVault, title: string, body: string, kind: NoteKind = 'note'): Promise<Note> {
   const note: Note = { id: newId(), title, body, addedAt: new Date().toISOString(), kind };
   const plain = Buffer.from(JSON.stringify({ title, body, kind }), 'utf8');
   v.data.notes[note.id] = {
@@ -106,7 +106,7 @@ export function readNotes(v: OpenVault): Note[] {
   return Object.values(v.data.notes).map((s) => {
     const { title, body, kind } = JSON.parse(
       unseal(v.masterKey, s.sealed, Buffer.from(s.id, 'utf8')).toString('utf8'),
-    ) as { title: string; body: string; kind?: 'note' | 'memory' };
+    ) as { title: string; body: string; kind?: NoteKind };
     return { id: s.id, title, body, addedAt: s.addedAt, kind: kind ?? 'note' };
   });
 }

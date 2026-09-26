@@ -1,18 +1,21 @@
 /**
- * The five colourways from the NOAI Design Board, numbered so they can be
- * compared on the running product. ?theme=3 picks one; the choice is kept in
- * this browser only. No data leaves: this file only sets an attribute.
+ * The theme switcher. Auto (no attribute) is orange and follows the device's
+ * dark or light setting, in pure CSS, so the page is correct with no script.
+ * Picking a theme pins it and is remembered in this browser only. It never
+ * touches the vault or the ledger. ?theme=purple-dark (or a number) picks one.
  */
-const THEMES = {
-  1: 'Orange glass',
-  2: 'Orange glass, light',
-  3: 'Purple glass, light',
-  4: 'Purple satin, dark',
-  5: 'Sky glass, light',
-};
+const THEMES = [
+  ['auto', 'A', 'Auto: orange, following your device'],
+  ['orange-dark', '1', 'Orange glass'],
+  ['orange-light', '2', 'Orange glass, light'],
+  ['purple-light', '3', 'Purple glass, light'],
+  ['purple-dark', '4', 'Purple satin, dark'],
+  ['sky', '5', 'Sky glass, light'],
+];
 const root = document.documentElement;
+const byNumber = Object.fromEntries(THEMES.map(([id, n]) => [n, id]));
 
-function remembered() {
+function read() {
   try {
     return localStorage.getItem('noai.theme');
   } catch {
@@ -20,26 +23,31 @@ function remembered() {
   }
 }
 
-function apply(n) {
-  const id = THEMES[n] ? String(n) : '1';
-  root.dataset.theme = id;
+function apply(id) {
+  const known = THEMES.some(([t]) => t === id) ? id : 'auto';
+  if (known === 'auto') delete root.dataset.theme;
+  else root.dataset.theme = known;
   try {
-    localStorage.setItem('noai.theme', id);
+    localStorage.setItem('noai.theme', known);
   } catch {
-    // private window or blocked storage: the theme still applies for this visit
+    // a private window or blocked storage: the theme still applies for this visit
   }
-  for (const b of document.querySelectorAll('#themes button')) b.setAttribute('aria-pressed', String(b.dataset.theme === id));
+  for (const b of document.querySelectorAll('#themes button')) b.setAttribute('aria-pressed', String(b.dataset.theme === known));
 }
 
-const bar = document.getElementById('themes');
-for (const [n, name] of Object.entries(THEMES)) {
+const box = document.getElementById('themes');
+for (const [id, n, name] of THEMES) {
   const b = document.createElement('button');
   b.type = 'button';
-  b.dataset.theme = n;
-  b.textContent = n;
+  b.dataset.theme = id;
   b.title = `${n} · ${name}`;
   b.setAttribute('aria-label', `Theme ${n}: ${name}`);
-  b.onclick = () => apply(n);
-  bar.append(b);
+  const sw = document.createElement('span');
+  sw.className = `sw-${id}`;
+  sw.textContent = n;
+  b.append(sw);
+  b.onclick = () => apply(id);
+  box.append(b);
 }
-apply(new URLSearchParams(location.search).get('theme') ?? remembered() ?? '1');
+const asked = new URLSearchParams(location.search).get('theme');
+apply(byNumber[asked] ?? asked ?? read() ?? 'auto');

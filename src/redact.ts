@@ -26,13 +26,24 @@ function luhn(digits: string): boolean {
   return sum % 10 === 0;
 }
 
+/**
+ * A date written with digits (2026-10-12, 12/10/2026, 12.10.2026) has eight
+ * digits like a phone number, but it is not one, and a reminder needs it.
+ * Found in a live test on 26 Sep 2026: the model was asked for a date it had
+ * been given, because the date had been replaced with [PHONE_1].
+ */
+function isDate(m: string): boolean {
+  const s = m.trim();
+  return /^\d{4}-\d{1,2}-\d{1,2}$/.test(s) || /^\d{1,2}[./-]\d{1,2}[./-]\d{4}$/.test(s);
+}
+
 /** Order matters: the most specific patterns run first. */
 const RULES: Rule[] = [
   { kind: 'SECRET', pattern: /\b(?:sk|pk|rk|ghp|gho|xox[bap]|AKIA)[-_A-Za-z0-9]{16,}\b/g },
   { kind: 'EMAIL', pattern: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
   { kind: 'IBAN', pattern: /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,4})?\b/g },
   { kind: 'CARD', pattern: /\b(?:\d[ -]?){13,19}\b/g, accept: luhn },
-  { kind: 'PHONE', pattern: /(?<![\w])\+?\d[\d\s().-]{6,}\d(?![\w])/g, accept: (m) => m.replace(/\D/g, '').length >= 8 },
+  { kind: 'PHONE', pattern: /(?<![\w])\+?\d[\d\s().-]{6,}\d(?![\w])/g, accept: (m) => m.replace(/\D/g, '').length >= 8 && !isDate(m) },
   { kind: 'IP', pattern: /\b(?:\d{1,3}\.){3}\d{1,3}\b/g },
 ];
 

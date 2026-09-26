@@ -12,6 +12,7 @@ import { type Embedder, loadEmbedder } from './embed.ts';
 import { disclose, type GateConfig, type GateResult, type Transport, httpTransport } from './gate.ts';
 import { MEMORY_TITLE, minimalSet, rememberIntent, splitMemories } from './memory.ts';
 import { Bm25Retriever, HybridRetriever, type Scored } from './retrieve.ts';
+import { detectSkill, type Skill, skillQuestion, splitReminders } from './skills.ts';
 import type { Note } from './types.ts';
 import { addNote, type OpenVault, readNotes } from './vault.ts';
 
@@ -22,6 +23,10 @@ export interface AskResult extends GateResult {
   retriever: 'hybrid' | 'bm25';
   /** facts the model asked to keep, already sealed into the vault */
   remembered: Note[];
+  /** reminders the model set, sealed into the vault with their due date as the title */
+  reminders: Note[];
+  /** the skill that shaped the question, if any */
+  skill: Skill['id'] | null;
 }
 
 export interface RememberResult {
@@ -57,20 +62,26 @@ export async function ask(
   k = 3,
   transport: Transport = httpTransport,
   embedder: Embedder | null | undefined = undefined,
+  skill: Skill | null = null,
 ): Promise<AskResult> {
   const notes = readNotes(v);
   const emb = embedder === undefined ? await sharedEmbedder() : embedder;
-  const hits: Scored[] = emb
-    ? await new HybridRetriever(notes, emb).search(question, k * 2)
-    : new Bm25Retriever(notes).search(question, k * 2);
+  const limit = skill ? skill.passages : k;
+  // Ranking uses the owner's words, never the task line a skill adds.
+  const hits: Scored[] = limit === 0 ? [] : emb
+    ? await new HybridRetriever(notes, emb).search(question, limit * 2)
+    : new Bm25Retriever(notes).search(question, limit * 2);
   // Minimal disclosure is the product, not a setting.
-  const chosen = minimalSet(hits, k).map((h) => h.chunk);
-  const result = await disclose(v, cfg, question, chosen, transport);
+  const chosen = minimalSet(hits, limit).map((h) => h.chunk);
+  const result = await disclose(v, cfg, skill ? skillQuestion(skill, question) : question, chosen, transport);
 
-  const { answer, facts } = splitMemories(result.answer);
+  const split = splitReminders(result.answer);
+  const { answer, facts } = splitMemories(split.answer);
+  const reminders: Note[] = [];
+  for (const r of split.reminders) reminders.push(await addNote(v, r.due, r.what, 'reminder'));
   const remembered: Note[] = [];
   for (const f of facts) remembered.push((await remember(v, f)).note);
-  return { ...result, answer, candidates: hits.length, used: chosen.length, retriever: emb ? 'hybrid' : 'bm25', remembered };
+  return { ...result, answer, candidates: hits.length, used: chosen.length, retriever: emb ? 'hybrid' : 'bm25', remembered, reminders, skill: skill?.id ?? null };
 }
 
 /** One turn from the UI or CLI: a memory to keep, or a question to answer. */
@@ -83,5 +94,5 @@ export async function respond(
 ): Promise<RememberResult | ({ kind: 'answer' } & AskResult)> {
   const fact = rememberIntent(text);
   if (fact) return remember(v, fact);
-  return { kind: 'answer', ...(await ask(v, cfg, text, 3, transport, embedder)) };
+  return { kind: 'answer', ...(await ask(v, cfg, text, 3, transport, embedder, detectSkill(text))) };
 }
