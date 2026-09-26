@@ -2,6 +2,8 @@
 
 Pronounced No Eye. A personal AI that answers questions about your private life without the model ever seeing it.
 
+**Live demo (fictional data):** https://noai-silentkey.netlify.app
+
 Built for the Nebius x NVIDIA Global AI Hackathon, Personal AI track, by Silent Key Technologies. Runs on **NVIDIA Nemotron 3 Super** served by **Nebius Token Factory**.
 
 ## The problem
@@ -49,6 +51,12 @@ npm run web                     # the browser demo and its relay on http://127.0
 
 Hosting: `netlify.toml` publishes `web/app` with the relay as a function at `/api/chat` and a strict Content Security Policy (no third-party script, style or connection). `relay/Dockerfile` runs the relay alone for Nebius Serverless. Either way, give it a dedicated Nebius key with a spending cap, and set `NOAI_ALLOWED_ORIGINS` to the demo's own origin. The relay's per-client limit is best effort; the cap on the key is the real ceiling.
 
+## Skills
+
+Three reusable skills run through the same gate, redaction and receipts as any question: **draft a message**, **set a reminder** and **summarise a bill**. A skill adds a task line to the question and never changes the system prompt, so the relay's check still holds. A bill summary sends the bill with its IBAN replaced and none of your notes. A reminder comes back with a date, has its real values put back on the device, and is sealed into the vault.
+
+If Nemotron 3 Super does not answer in time, or returns 429 or a 5xx, the same redacted passages go once to Nemotron 3 Nano. Every attempt that sent bytes is receipted, answered or not.
+
 ## Memory
 
 Start a message with "remember that" and NOAI keeps the fact in the sealed vault. That never calls the model, so it writes no receipt: nothing left.
@@ -70,6 +78,8 @@ Proven by the code and the tests:
 - Saving a memory sends nothing and writes no receipt (test: `saving a memory sends nothing, writes no ledger entry, and seals it`).
 - When the model asks to remember something, it only ever saw placeholders. The real values are put back and sealed on device (test: `keeps what the model asks to remember, with the real values put back on device`).
 
+The privacy claims each have their own test, including three that prove what NOAI does **not** hide: `node --test test/claims.test.ts`.
+
 Not proven, stated plainly:
 
 - A receipt is a signed statement by your device. It proves what your device sent and that the record was not altered afterwards. It cannot prove what the provider does with a request once it arrives.
@@ -85,7 +95,7 @@ git clone https://github.com/SilentKeyTech/noai && cd noai
 npm install                     # onnxruntime-web, plus typescript for dev
 npm run model                   # one time: fetch the 23 MB embedding model, hash checked
 echo NEBIUS_API_KEY=your_key > .env
-npm test                        # 25 tests, no network
+npm test                        # 59 tests, no network
 npm run serve                   # http://127.0.0.1:7788
 ```
 
@@ -116,3 +126,7 @@ Our honest feedback on both is in [FEEDBACK.md](FEEDBACK.md).
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE).
+
+## Built before the hackathon
+
+One file: `src/crypto.ts` is shared byte for byte with BurnKey, another Silent Key Technologies product, where it was first committed on 1 September 2026. A test checks the two copies are identical. Everything else was written for this hackathon, from the first commit on 20 September 2026.
