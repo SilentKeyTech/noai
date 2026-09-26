@@ -10,6 +10,7 @@
  */
 import { type Embedder, loadEmbedder } from './embed.ts';
 import { disclose, type GateConfig, type GateResult, type Transport, httpTransport } from './gate.ts';
+import { MEMORY_TITLE, minimalSet, rememberIntent, splitMemories } from './memory.ts';
 import { Bm25Retriever, HybridRetriever, type Scored } from './retrieve.ts';
 import type { Note } from './types.ts';
 import { addNote, type OpenVault, readNotes } from './vault.ts';
@@ -41,37 +42,12 @@ export function sharedEmbedder(): Promise<Embedder | null> {
   return embedderPromise;
 }
 
-const REMEMBER_PREFIX = /^\s*(?:please\s+)?(?:remember|note|don'?t forget|keep in mind)(?:\s+that)?\s*[:,-]?\s+/i;
-
-/** "remember that my GP is now Dr Rana" -> "my GP is now Dr Rana". null if it is a question. */
-export function rememberIntent(text: string): string | null {
-  const m = REMEMBER_PREFIX.exec(text);
-  if (!m) return null;
-  const fact = text.slice(m[0].length).trim();
-  // "remember when Sami's birthday is?" is a question, not something to keep.
-  return fact.length >= 3 && !fact.endsWith('?') ? fact : null;
-}
+export { rememberIntent, splitMemories } from './memory.ts';
 
 export async function remember(v: OpenVault, fact: string): Promise<RememberResult> {
   const clean = fact.replace(/\s+/g, ' ').trim();
-  // The title travels with every disclosed passage, so it stays one word.
-  // Repeating the fact in it would send the fact twice.
-  return { kind: 'memory', note: await addNote(v, 'Memory', clean, 'memory'), bytesSent: 0 };
-}
-
-/** Pull "REMEMBER:" lines out of a rehydrated answer. */
-export function splitMemories(answer: string): { answer: string; facts: string[] } {
-  const facts: string[] = [];
-  const kept = answer
-    .split('\n')
-    .filter((line) => {
-      const m = /^\s*REMEMBER:\s*(.+)$/i.exec(line);
-      if (m?.[1]?.trim()) facts.push(m[1].trim());
-      return !m;
-    })
-    .join('\n')
-    .trim();
-  return { answer: kept, facts };
+  // Repeating the fact in the title would send the fact twice.
+  return { kind: 'memory', note: await addNote(v, MEMORY_TITLE, clean, 'memory'), bytesSent: 0 };
 }
 
 export async function ask(
@@ -87,10 +63,8 @@ export async function ask(
   const hits: Scored[] = emb
     ? await new HybridRetriever(notes, emb).search(question, k * 2)
     : new Bm25Retriever(notes).search(question, k * 2);
-  // Only passages that score at least a third of the best one go out.
   // Minimal disclosure is the product, not a setting.
-  const top = hits[0]?.score ?? 0;
-  const chosen = hits.filter((h) => h.score >= top / 3).slice(0, k).map((h) => h.chunk);
+  const chosen = minimalSet(hits, k).map((h) => h.chunk);
   const result = await disclose(v, cfg, question, chosen, transport);
 
   const { answer, facts } = splitMemories(result.answer);

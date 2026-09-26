@@ -12,14 +12,14 @@
  */
 import { newId, sha256 } from './crypto.ts';
 import { append } from './ledger.ts';
-import { redactAll, rehydrate } from './redact.ts';
+import { DEFAULT_MODEL, prepareDisclosure, requestBody, stripThinking } from './prompt.ts';
+import { rehydrate } from './redact.ts';
+
+export { buildPrompt, DEFAULT_MODEL, FAST_MODEL, stripThinking } from './prompt.ts';
 import type { Chunk, DisclosureReceipt, LedgerEntry, SignedDisclosure } from './types.ts';
 import { signDisclosure } from './ledger.ts';
 import { type OpenVault, storeDisclosure, unwrapPrivateKey } from './vault.ts';
 import { scrub } from './crypto.ts';
-
-export const DEFAULT_MODEL = 'nvidia/nemotron-3-super-120b-a12b';
-export const FAST_MODEL = 'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B';
 
 export interface GateConfig {
   root: string;
@@ -60,24 +60,6 @@ export interface GateResult {
   ms: number;
 }
 
-const SYSTEM = [
-  'You are NOAI, a private assistant. You only see the passages below, chosen and redacted on the owner\'s device.',
-  'Answer from the passages only. If they do not contain the answer, say so plainly.',
-  'Values like [EMAIL_1] or [PHONE_2] are placeholders for redacted data. Use them exactly as written, never guess what they stand for.',
-  'Be brief. Cite passages as [P1], [P2].',
-  'If the question itself tells you a new lasting fact about the owner (a new doctor, a changed date, a new number), end with one extra line of the form "REMEMBER: <the fact as one sentence>", keeping any placeholders exactly as written. Never add that line for facts already in the passages, and never for anything you inferred.',
-].join(' ');
-
-export function buildPrompt(question: string, passages: { title: string; text: string }[]): string {
-  const ctx = passages.map((p, i) => `[P${String(i + 1)}] ${p.title}\n${p.text}`).join('\n\n');
-  return `PASSAGES\n${ctx || '(none matched)'}\n\nQUESTION\n${question}`;
-}
-
-/** Nemotron and other reasoning models may put their thinking inline. It is not part of the answer. */
-export function stripThinking(text: string): string {
-  return text.replace(/^[\s\S]*?<\/think>/, '').trim();
-}
-
 export class GateRefused extends Error {}
 
 export async function disclose(
@@ -91,20 +73,9 @@ export async function disclose(
   if (!cfg.apiKey) throw new GateRefused('NEBIUS_API_KEY is not set. Nothing was sent.');
 
   // 1. redact, with one placeholder space across question and passages
-  const red = redactAll([question, ...chunks.flatMap((c) => [c.title, c.text])]);
-  const [q = '', ...rest] = red.texts;
-  const passages = chunks.map((_, i) => ({ title: rest[i * 2] ?? '', text: rest[i * 2 + 1] ?? '' }));
-  const disclosed = buildPrompt(q, passages);
-
-  const body = JSON.stringify({
-    model: cfg.model,
-    max_tokens: cfg.maxTokens,
-    temperature: 0.2,
-    messages: [
-      { role: 'system', content: SYSTEM },
-      { role: 'user', content: disclosed },
-    ],
-  });
+  const red = prepareDisclosure(question, chunks);
+  const disclosed = red.disclosed;
+  const body = requestBody(cfg.model, cfg.maxTokens, disclosed);
 
   // 2. budget
   const payloadBytes = Buffer.byteLength(body, 'utf8');

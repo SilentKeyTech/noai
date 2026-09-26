@@ -1,0 +1,17 @@
+# The public demo: the browser build as static files, the relay as one function.
+# Set NEBIUS_API_KEY (a dedicated key with a spending cap) and NOAI_ALLOWED_ORIGINS
+# in the site's environment. Neither is ever in this repository.
+[build]
+  command = "npm run model && npm run build:web"
+  publish = "web/app"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    Referrer-Policy = "no-referrer"
+    X-Content-Type-Options = "nosniff"

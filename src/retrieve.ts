@@ -7,7 +7,7 @@
  * endpoint: sending the corpus out to be embedded would disclose all of it,
  * which defeats the product.
  */
-import { cosine, type Embedder } from './embed.ts';
+import { cosine, type Embedder } from './vector.ts';
 import type { Chunk, Note } from './types.ts';
 
 export interface Scored {

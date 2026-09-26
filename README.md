@@ -30,6 +30,25 @@ A personal assistant is only useful if it knows your life: your health notes, yo
 
 The demo is a split screen. On the left, you ask and get an answer. On the right, a live receipt tape shows every disclosure: how many bytes left, which passages, what was redacted, and exactly what the model saw. Press **Tamper with the log** and chain verification turns red, naming the entry that was edited.
 
+## In the browser
+
+`web/app` is the same product running entirely in a browser tab: the vault in IndexedDB, AES-256-GCM through WebCrypto, scrypt and Ed25519 from the audited noble libraries, and the embedding model as WebAssembly. Ranking, redaction and the prompt come from the same `src/` modules the tests prove, transpiled rather than rewritten, so what leaves the browser is byte for byte what the desktop would send (test: `sends only redacted text through the relay, and the receipt verifies with the desktop verifier`).
+
+A browser cannot hold an API key, so a relay adds it. The relay (`relay/core.mjs`, one short file) is the one component you have to trust, and it is built to be boring:
+
+- it forwards the exact bytes it received, so the hash on your receipt is the hash of what reached Nebius
+- it accepts only a NOAI disclosure: NOAI's own system prompt, an allowlisted Nemotron model, a bounded size. Anything else is refused, so the key cannot be borrowed as a general model proxy
+- it logs nothing, and a test fails the build if a logging call appears in it
+
+Receipts downloaded from the browser verify offline with `noai verify`, with no browser involved.
+
+```bash
+npm run build:web               # transpile the shared core, vendor the libraries, copy the model
+npm run web                     # the browser demo and its relay on http://127.0.0.1:7791
+```
+
+Hosting: `netlify.toml` publishes `web/app` with the relay as a function at `/api/chat` and a strict Content Security Policy (no third-party script, style or connection). `relay/Dockerfile` runs the relay alone for Nebius Serverless. Either way, give it a dedicated Nebius key with a spending cap, and set `NOAI_ALLOWED_ORIGINS` to the demo's own origin. The relay's per-client limit is best effort; the cap on the key is the real ceiling.
+
 ## Memory
 
 Start a message with "remember that" and NOAI keeps the fact in the sealed vault. That never calls the model, so it writes no receipt: nothing left.
