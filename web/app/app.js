@@ -11,17 +11,22 @@ const cfg = { relayUrl: './api/chat', model: MODEL, maxTokens: 4096, maxPayloadB
 const store = idbStore();
 let vault = null;
 let embedder = null;
+let modelLoading = true;
 const embedderReady = loadEmbedder()
   .then((e) => { embedder = e; })
   .catch((e) => console.warn(`Embeddings not used: ${e.message}`))
-  .finally(drawMeta);
+  .finally(() => { modelLoading = false; drawMeta(); });
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+/** Escape, then mark every placeholder the model saw instead of a real value. */
+const withPlaceholders = (s) => esc(s).replace(/\[[A-Z]+_\d+\]/g, (p) => `<span class="ph">${p}</span>`);
 
 function drawMeta() {
-  const retrieval = embedder ? 'BM25 + on-device embeddings' : 'BM25';
-  $('meta').textContent = `${MODEL}${vault ? `  ·  device ${signerFingerprint(vault.data.device.publicKey)}` : ''}  ·  retrieval ${retrieval}`;
+  const retrieval = modelLoading
+    ? 'loading the on-device search model (22 MB, once; it never leaves this tab)'
+    : embedder ? 'BM25 + on-device embeddings' : 'BM25';
+  $('meta').textContent = `${MODEL}${vault ? ` · device ${signerFingerprint(vault.data.device.publicKey)}` : ''} · retrieval ${retrieval}`;
 }
 
 async function refresh() {
@@ -34,7 +39,7 @@ async function refresh() {
   $('app').classList.toggle('hidden', !vault);
   if (vault) {
     const notes = await readNotes(vault);
-    $('notes').innerHTML = notes.map((n) => `<li>${n.kind === 'memory' ? '<span class="tag">memory</span>' : ''}<span>${esc(n.kind === 'memory' ? n.body : n.title)}</span> <span class="dim">· sealed</span><button class="forget" data-id="${esc(n.id)}">forget</button></li>`).join('') || '<li class="dim">Empty. Load the demo notes or add your own.</li>';
+    $('notes').innerHTML = notes.map((n) => `<li>${n.kind === 'memory' ? '<span class="tag">memory</span>' : ''}<span>${esc(n.kind === 'memory' ? n.body : n.title)}</span><span class="seal">sealed</span><button class="forget" data-id="${esc(n.id)}" aria-label="Forget ${esc(n.kind === 'memory' ? 'this memory' : n.title)}">forget</button></li>`).join('') || '<li class="empty">Empty. Load the demo notes or add your own.</li>';
   }
   drawMeta();
   await drawTape();
@@ -52,12 +57,14 @@ async function drawTape() {
     const r = byId.get(e.receiptId) ?? {};
     const disclosed = vault ? await readDisclosure(vault, e.receiptId) : null;
     const reds = Object.entries(r.redactions ?? {}).map(([k, n]) => `<span class="chip red">${esc(k)} ×${n} redacted</span>`).join('');
-    cards.push(`<div class="card${!v.valid && v.brokenAt === e.seq ? ' broken' : ''}">
-      <div class="top"><b>#${e.seq}</b><span>${esc(new Date(e.at).toLocaleTimeString())}</span><span>${esc(e.model)}</span><span style="margin-left:auto">${e.payloadBytes} bytes out</span></div>
-      <div class="chips"><span class="chip">${(r.sources ?? []).length} passages</span>${reds || '<span class="chip">no redactions needed</span>'}${r.usage ? `<span class="chip">${r.usage.promptTokens} in / ${r.usage.completionTokens} out tokens</span>` : ''}</div>
-      ${disclosed ? `<details><summary>Exactly what the model saw</summary><pre>${esc(disclosed)}</pre></details>` : ''}
-      <div class="hash" style="margin-top:8px">payload sha256 ${esc(e.payloadHash)}<br>entry ${esc(e.entryHash)}<br>prev ${esc(e.prev)}</div>
-    </div>`);
+    const broken = !v.valid && v.brokenAt === e.seq;
+    const n = (r.sources ?? []).length;
+    cards.push(`<div class="link${broken ? ' broken' : ''}"><div class="rail"></div><div class="card${broken ? ' broken' : ''}">
+      <div class="top"><b>#${e.seq}</b><span>${esc(new Date(e.at).toLocaleTimeString())}</span><span class="out">${e.payloadBytes} bytes out</span></div>
+      <div class="chips"><span class="chip">${n} passage${n === 1 ? '' : 's'}</span>${reds || '<span class="chip">no redactions needed</span>'}${r.usage ? `<span class="chip">${r.usage.promptTokens} in / ${r.usage.completionTokens} out tokens</span>` : ''}</div>
+      ${disclosed ? `<details><summary>Exactly what the model saw</summary><pre>${withPlaceholders(disclosed)}</pre></details>` : ''}
+      <p class="hash">payload sha256 ${esc(e.payloadHash)}<br>entry ${esc(e.entryHash)} · prev ${esc(e.prev.slice(0, 16))}…</p>
+    </div></div>`);
   }
   $('tape').innerHTML = cards.join('');
 }
