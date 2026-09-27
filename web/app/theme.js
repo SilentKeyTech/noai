@@ -33,6 +33,9 @@ function apply(id) {
     // a private window or blocked storage: the theme still applies for this visit
   }
   for (const b of document.querySelectorAll('#themes button')) b.setAttribute('aria-pressed', String(b.dataset.theme === known));
+  // The purple themes carry the blue mark, in the tab as well as the header.
+  const icon = document.querySelector('link[rel="icon"]');
+  if (icon) icon.href = known.startsWith('purple') ? './brand/favicon-blue.svg' : './brand/favicon.svg';
 }
 
 const box = document.getElementById('themes');
