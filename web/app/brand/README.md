@@ -1,9 +1,11 @@
 # NOAI brand
 
-The mark is a lens with its lid lowered: the lid's edge is the curve of a closed eye, and nothing looks out from under it. Chosen on the NOAI Design Board (Logo C, refined), 26 Sep 2026.
+The mark is a closed eye inside a ring: a dot above, and seven lashes glowing under the lowered lid. The product works with its eyes closed. Confirmed by Ramzi on 27 Sep 2026 (the orange cover), replacing the 26 Sep lidded lens.
 
-- `noai-mark.svg`: the mark, 32-unit grid, ring radius 14 and 10.6, lid 9.2, drawn in `currentColor`.
-- `noai-wordmark.svg`: NOAI with the lidded O, outlined, `currentColor`.
-- `favicon.svg`: the small cut (ring 15 / 10.5), black on light, orange on dark.
+- `noai-mark.svg`: the full mark in its fixed colours (disc #ED3200, black). Use at 64 px and above.
+- `noai-mark-small.svg`: the small cut (outer ring, dot, eye; no lashes), rings in `currentColor`. Use below 64 px.
+- `noai-wordmark.svg`: NOAI in Montserrat Light, outlined and converted to paths, stroke in `currentColor`.
+- `favicon.svg`: the small cut on a #FC481C rounded square, so it reads on light and dark tabs.
 
-Minimum size: 16 px for the mark (use the small cut below 32 px). Clear space: half the mark's height on every side.
+Colours: field #FC481C, disc #ED3200, ink #000. Clear space: half the mark's height on every side.
+The full kit (lockups, app icons, PNG sizes, favicon.ico) is in Downloads as "NOAI - Logo Kit (orange).zip".

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 940"><defs><linearGradient id="smc" x1="0" y1="0" x2="0" y2="1"><stop offset=".45" stop-color="#ED3200"/><stop offset=".8" stop-color="#000"/></linearGradient></defs>
+    <circle cx="470" cy="470" r="391" fill="#ED3200" stroke="currentColor" stroke-width="80"/>
+    <circle cx="470" cy="150" r="44" fill="currentColor"/>
+    <ellipse cx="470" cy="500" rx="250" ry="215" fill="url(#smc)" stroke="currentColor" stroke-width="62"/>
+    <ellipse cx="470" cy="455" rx="190" ry="128" fill="#ED3200" stroke="currentColor" stroke-width="30"/></svg>
