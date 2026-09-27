@@ -218,6 +218,7 @@
   .card .top b { font-size: 16px; color: var(--ink); }
   .card .top .out { margin-left: auto; color: var(--ink); font-weight: 600; }
   .card.broken .top, .card.broken .top b, .card.broken .top .out { color: var(--bad-ink); }
+  .card.broken .chip:not(.red), .card.broken .hash, .card.broken summary { color: var(--bad-ink); border-color: var(--bad-edge); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
   .chip { font: 11px/1 var(--mono); padding: 6px 10px; border-radius: 999px; border: 1px solid var(--chip-edge); color: var(--chip-ink); }
   .chip.red { background: var(--red); border-color: var(--red); color: var(--red-ink); font-weight: 700; }
