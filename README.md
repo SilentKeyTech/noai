@@ -63,6 +63,26 @@ Start a message with "remember that" and NOAI keeps the fact in the sealed vault
 
 The model can also keep things. If your question tells it something new ("Sami has a new number now, ..."), it ends its reply with a `REMEMBER:` line. It only ever saw `[PHONE_1]`, so the device swaps the real number back in before sealing the memory. Every memory shows in the vault list and can be forgotten, which deletes the sealed entry rather than hiding it.
 
+## Voice assistants and agents (MCP)
+
+NOAI also runs as a self-hosted MCP server, so Alexa+ or any assistant that speaks the Model Context Protocol (2025-11-25, Streamable HTTP) can ask it things. The assistant is someone else's model too, so NOAI treats every tool result as a disclosure:
+
+- **Minimal.** The assistant gets the answer, never the passages behind it. Citations like `[P1]` are removed because they point at text it never sees.
+- **Redacted.** Private values stay placeholders such as `[PHONE_1]`. The owner can allow a kind for assistants with `NOAI_MCP_REVEAL=PHONE`; everything else stays on the device.
+- **Receipted.** The exact result text is hashed, signed with the device key and chained into the same ledger as the Nemotron calls, naming the client. One spoken question leaves two receipts: what Nemotron saw, and what the assistant was handed.
+
+Four tools: `ask_noai` (questions, drafts, reminders, bill summaries), `remember` (sends nothing, writes no receipt), `list_reminders` and `verify_disclosures` (returns the chain verdict, no vault content).
+
+```bash
+export NOAI_PASSPHRASE='your passphrase'
+export NOAI_MCP_TOKEN="$(node -e "console.log(crypto.randomBytes(24).toString('base64url'))")"
+npm run mcp                     # http://127.0.0.1:7792/mcp
+npx @modelcontextprotocol/inspector --cli http://127.0.0.1:7792/mcp --transport http \
+  --header "Authorization: Bearer $NOAI_MCP_TOKEN" --method tools/list
+```
+
+The server listens on 127.0.0.1 by default and every request needs the bearer token. An `Origin` header is refused unless listed in `NOAI_MCP_ALLOWED_ORIGINS`. To reach it from a hosted assistant, put it behind an HTTPS tunnel you control (`NOAI_MCP_HOST`, `NOAI_MCP_PORT`); the vault, the keys and the ledger stay on your machine.
+
 ## What is proven, and what is not
 
 Proven by the code and the tests:
@@ -76,6 +96,7 @@ Proven by the code and the tests:
 - Retrieval understands meaning, on device: "who is my doctor?" finds the note that says GP, which BM25 alone misses (test: `hybrid finds the GP for "doctor", and sends nothing from other notes`).
 - The embedding model is checked against a pinned SHA-256 before it runs, and refused if it does not match (test: `refuses a model file that does not match its pinned hash`).
 - Saving a memory sends nothing and writes no receipt (test: `saving a memory sends nothing, writes no ledger entry, and seals it`).
+- An MCP client receives the answer only, with private values still placeholders, and the handover is signed into the same chain as the model call (tests: `test/mcp.test.ts`).
 - When the model asks to remember something, it only ever saw placeholders. The real values are put back and sealed on device (test: `keeps what the model asks to remember, with the real values put back on device`).
 
 The privacy claims each have their own test, including three that prove what NOAI does **not** hide: `node --test test/claims.test.ts`.
@@ -84,6 +105,7 @@ Not proven, stated plainly:
 
 - A receipt is a signed statement by your device. It proves what your device sent and that the record was not altered afterwards. It cannot prove what the provider does with a request once it arrives.
 - Semantic retrieval is looser than keyword retrieval. Asked "who is my doctor?", the demo sends the GP line, the dentist memory and the allergy line from the same health note. Nothing from money, family or travel goes out, but the allergy line is a near miss the tape shows plainly.
+- Through a voice assistant, the assistant's provider already hears the spoken question and receives the answer it is handed. NOAI limits and records that handover; it cannot limit what the assistant does with it. Any kind allowed in `NOAI_MCP_REVEAL` is handed over in the clear.
 - The redactor is pattern based. It catches structured identifiers (emails, phone numbers, IBANs, card numbers, API keys, IP addresses), not names or free text. The passages it sends are the minimum needed, and the tape shows every word of them.
 
 ## Run it
@@ -95,7 +117,7 @@ git clone https://github.com/SilentKeyTech/noai && cd noai
 npm install                     # onnxruntime-web, plus typescript for dev
 npm run model                   # one time: fetch the 23 MB embedding model, hash checked
 echo NEBIUS_API_KEY=your_key > .env
-npm test                        # 59 tests, no network
+npm test                        # 69 tests, no network
 npm run serve                   # http://127.0.0.1:7788
 ```
 

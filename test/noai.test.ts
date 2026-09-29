@@ -192,14 +192,14 @@ describe('the ledger', () => {
 describe('structure', () => {
   it('only gate.ts touches the network', () => {
     const src = new URL('../src/', import.meta.url);
-    // Outbound capability of any kind. server.ts may import node:http, but only to listen.
+    // Outbound capability of any kind. server.ts and mcp-serve.ts may import node:http, but only to listen.
     const outbound = /\bfetch\s*\(|node:https['"]|node:net['"]|node:tls['"]|node:dgram['"]|XMLHttpRequest|WebSocket|\bhttp\.(?:request|get)\b|\bundici\b/;
     const offenders = readdirSync(src)
       .filter((f) => f.endsWith('.ts') && f !== 'gate.ts')
       .filter((f) => {
         const code = readFileSync(new URL(f, src), 'utf8');
         if (outbound.test(code)) return true;
-        return f !== 'server.ts' && /node:http['"]/.test(code);
+        return f !== 'server.ts' && f !== 'mcp-serve.ts' && /node:http['"]/.test(code);
       });
     assert.deepEqual(offenders, []);
   });

@@ -68,6 +68,8 @@ export interface GateResult {
   model: string;
   /** true when the main model failed and the fallback answered */
   fellBack: boolean;
+  /** placeholder -> real value, never leaves this process. Lets a caller restore only some kinds. */
+  restore: Map<string, string>;
 }
 
 export class GateRefused extends Error {}
@@ -188,5 +190,5 @@ export async function disclose(
   }
 
   // 6. rehydrate on device
-  return { answer: rehydrate(out.rawAnswer, red.map), rawAnswer: out.rawAnswer, disclosed, signed: out.signed, entry: out.entry, ms: Date.now() - started, model, fellBack };
+  return { answer: rehydrate(out.rawAnswer, red.map), rawAnswer: out.rawAnswer, disclosed, signed: out.signed, entry: out.entry, ms: Date.now() - started, model, fellBack, restore: red.map };
 }
