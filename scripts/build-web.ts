@@ -16,7 +16,7 @@ import { MODEL, modelDir } from '../src/embed.ts';
 
 const root = new URL('../', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 const app = join(root, 'web', 'app');
-const PURE = ['names', 'redact', 'retrieve', 'vector', 'prompt', 'memory', 'skills'];
+const PURE = ['names', 'redact', 'ingest', 'retrieve', 'vector', 'prompt', 'memory', 'skills'];
 
 // 1. pure modules
 const coreDir = join(app, 'lib', 'core');
@@ -56,6 +56,12 @@ const ortSrc = join(root, 'node_modules', 'onnxruntime-web', 'dist');
 await mkdir(join(vendor, 'ort'), { recursive: true });
 for (const f of ['ort.wasm.min.mjs', 'ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm']) {
   await cp(join(ortSrc, f), join(vendor, 'ort', f));
+}
+// pdf.js reads PDFs for import, in the tab. Only the reader and its worker; no viewer, fonts or canvas.
+const pdfSrc = join(root, 'node_modules', 'pdfjs-dist');
+await mkdir(join(vendor, 'pdfjs'), { recursive: true });
+for (const f of ['build/pdf.min.mjs', 'build/pdf.worker.min.mjs', 'LICENSE']) {
+  await cp(join(pdfSrc, f), join(vendor, 'pdfjs', f.replace('build/', '')));
 }
 
 // 3. the embedding model, if it has been fetched

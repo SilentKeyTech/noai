@@ -57,6 +57,16 @@ Three reusable skills run through the same gate, redaction and receipts as any q
 
 If Nemotron 3 Super does not answer in time, or returns 429 or a 5xx, the same redacted passages go once to Nemotron 3 Nano. Every attempt that sent bytes is receipted, answered or not.
 
+## Import
+
+A vault is only useful with your life in it, so NOAI reads the files you already have, on the device: a **WhatsApp chat export** (Android or iPhone, English or Arabic, one note per day of conversation), **.txt and .md** files (one note per heading), and **PDFs** with a text layer, including Arabic PDFs drawn one glyph at a time, which are put back in reading order. Importing sends nothing and writes no receipt, and importing the same file twice adds nothing. A scanned PDF with no text layer is refused with a plain message; text recognition is not built yet.
+
+```bash
+npm run noai -- import "WhatsApp Chat with Sami.txt" lease.pdf notes.md
+```
+
+In the browser, **+ Import files** under the vault does the same in the tab. pdf.js is vendored and served from the same origin; it is given the bytes, never a URL.
+
 ## Memory
 
 Start a message with "remember that" and NOAI keeps the fact in the sealed vault. That never calls the model, so it writes no receipt: nothing left.

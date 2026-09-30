@@ -320,6 +320,14 @@
                 <div class="row"><button class="ghost" id="add">Seal note</button></div>
               </div>
             </details>
+            <details><summary>+ Import files</summary>
+              <div class="stack">
+                <p class="dim">A WhatsApp chat export (.txt, without media), a .txt or .md file, or a PDF with a text layer. Read and sealed in this tab. Nothing is sent.</p>
+                <input type="file" id="imp" multiple accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf" hidden>
+                <div class="row"><button class="ghost" id="impbtn">Choose files</button></div>
+                <p class="stats" id="impstat" aria-live="polite"></p>
+              </div>
+            </details>
             <details><summary>Start over</summary>
               <p class="dim">Deletes the vault, the receipts and the chain from this browser. There is no copy anywhere else, so this cannot be undone.</p>
               <div class="row" style="margin-top:10px"><button class="ghost danger" id="wipe">Delete everything in this browser</button></div>

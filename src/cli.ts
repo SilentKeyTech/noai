@@ -1,5 +1,5 @@
 /**
- * noai init | seed | add <title> <text> | remember <fact> | ask <question> | tape | verify | serve
+ * noai init | seed | add <title> <text> | import <file...> | remember <fact> | ask <question> | tape | verify | serve
  *
  * The passphrase comes from NOAI_PASSPHRASE. The Nebius key from NEBIUS_API_KEY
  * (npm scripts load .env, which is gitignored).
@@ -7,6 +7,7 @@
 import { readFile } from 'node:fs/promises';
 import { ask, remember } from './agent.ts';
 import { configFromEnv } from './gate.ts';
+import { importFile } from './importer.ts';
 import { noaiHome } from './home.ts';
 import { readLedger, readReceipts, verifyLedger } from './ledger.ts';
 import { addNote, closeVault, createVault, openVault, signerFingerprint } from './vault.ts';
@@ -42,6 +43,19 @@ async function main(): Promise<void> {
       const v = await openVault(root, passphrase());
       const n = await addNote(v, title, body.join(' '));
       console.log(`Sealed note ${n.id}.`);
+      closeVault(v);
+      return;
+    }
+    case 'import': {
+      if (args.length === 0) throw new Error('Usage: noai import <file...>  (WhatsApp .txt export, .txt, .md or .pdf)');
+      const v = await openVault(root, passphrase());
+      for (const f of args) {
+        const r = await importFile(v, f);
+        const dup = r.alreadyThere ? `, ${String(r.alreadyThere)} already in the vault` : '';
+        console.log(`${r.file}: ${r.format}, sealed ${String(r.added)} note(s)${dup}.`);
+        for (const w of r.warnings) console.log(`  ${w}`);
+      }
+      console.log('Nothing was sent.');
       closeVault(v);
       return;
     }

@@ -12,11 +12,14 @@
 /** Arabic letters are compared without diacritics or tatweel, with every alef form as ا and ة as ه. */
 export function normToken(raw: string): string {
   const s = raw.normalize('NFKC');
-  if (/[؀-ۿ]/.test(s)) {
+  if (/[\u0600-\u06FF]/.test(s)) {
     return s
-      .replace(/[ً-ٰٟـ]/g, '')
+      .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
       .replace(/[أإآٱ]/g, 'ا')
-      .replace(/ة/g, 'ه');
+      .replace(/ة/g, 'ه')
+      .replace(/ھ/g, 'ه')
+      .replace(/ی/g, 'ي')
+      .replace(/ک/g, 'ك');
   }
   return s.toLowerCase().replace(/’/g, "'");
 }

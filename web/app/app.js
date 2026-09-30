@@ -5,6 +5,7 @@ import { loadEmbedder } from './lib/embedder.js';
 import { GateRefused } from './lib/gate.js';
 import { exportFiles, readLedger, readReceipts, verifyLedger } from './lib/ledger.js';
 import { idbStore } from './lib/store.js';
+import { ingestText, newOnly, parsePdfText } from './lib/core/ingest.js';
 import { addNote, closeVault, createVault, forgetNote, openVault, readDisclosure, readNotes, signerFingerprint, vaultExists } from './lib/vault.js';
 
 const MODEL = 'nvidia/nemotron-3-super-120b-a12b';
@@ -162,6 +163,28 @@ $('add').onclick = async () => {
   await addNote(vault, title, body);
   $('nt').value = '';
   $('nb').value = '';
+  await refresh();
+};
+$('impbtn').onclick = () => $('imp').click();
+$('imp').onchange = async () => {
+  const files = [...$('imp').files];
+  $('imp').value = '';
+  if (files.length === 0) return;
+  const lines = [];
+  for (const f of files) {
+    try {
+      const parsed = /\.pdf$/i.test(f.name)
+        ? parsePdfText(await (await import('./lib/pdf.js')).pdfPages(new Uint8Array(await f.arrayBuffer())), f.name)
+        : ingestText(await f.text(), f.name);
+      const fresh = newOnly(parsed.notes, await readNotes(vault));
+      for (const d of fresh) await addNote(vault, d.title, d.body);
+      const dup = parsed.notes.length - fresh.length;
+      lines.push(`${esc(f.name)}: sealed ${fresh.length} note${fresh.length === 1 ? '' : 's'}${dup ? `, ${dup} already in the vault` : ''}.${parsed.warnings.map((w) => ` ${esc(w)}`).join('')}`);
+    } catch (e) {
+      lines.push(`${esc(f.name)}: not imported. ${esc(e.message)}`);
+    }
+  }
+  $('impstat').innerHTML = `${lines.join('<br>')}<br>Nothing was sent.`;
   await refresh();
 };
 $('notes').onclick = async (e) => {

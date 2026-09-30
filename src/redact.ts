@@ -89,7 +89,7 @@ const PLACEHOLDER = /^\[[A-Z]+_\d+\]$/;
 
 /** Arabic-Indic (٠-٩) and Extended Arabic-Indic (۰-۹) digits as 0-9. One UTF-16 unit each way, so offsets line up. */
 function asciiDigits(s: string): string {
-  return s.replace(/[٠-٩۰-۹]/g, (c) => String((c.charCodeAt(0) & 0xf) % 10));
+  return s.replace(/[\u0660-\u0669\u06F0-\u06F9]/g, (c) => String((c.charCodeAt(0) & 0xf) % 10));
 }
 
 export interface Redaction {
@@ -153,8 +153,8 @@ interface Token {
   ar: boolean;
 }
 
-const WORD = /[\p{L}\p{M}ـ]+(?:['’-][\p{L}\p{M}ـ]+)*/gu;
-const ARABIC = /[؀-ۿ]/;
+const WORD = /[\p{L}\p{M}\u0640]+(?:['’-][\p{L}\p{M}\u0640]+)*/gu;
+const ARABIC = /[\u0600-\u06FF]/;
 
 function tokenize(text: string, known: Set<string>): Token[] {
   const out: Token[] = [];
@@ -169,7 +169,7 @@ function tokenize(text: string, known: Set<string>): Token[] {
       if (GIVEN_ARABIC.has(rest) || known.has(rest)) {
         n = rest;
         cs += 1;
-        while (/[ً-ٰٟـ]/.test(text[cs] ?? '')) cs += 1;
+        while (/[\u064B-\u065F\u0670\u0640]/.test(text[cs] ?? '')) cs += 1;
       }
     }
     out.push({ cs, e: m.index + raw.length, n, cap: !ar && /^\p{Lu}/u.test(raw), ar });
@@ -193,7 +193,7 @@ function continues(t: Token): boolean {
 
 function adjacent(text: string, a: Token, b: Token, allowDot = false): boolean {
   const gap = text.slice(a.e, b.cs);
-  return allowDot ? /^[.,:]?[ \t ]+$/.test(gap) : /^[ \t ]+$/.test(gap);
+  return allowDot ? /^[.,:]?[ \t\u00A0]+$/.test(gap) : /^[ \t\u00A0]+$/.test(gap);
 }
 
 interface Span {
