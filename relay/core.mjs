@@ -87,6 +87,48 @@ export async function relay(request, env, fetchImpl = fetch) {
   });
 }
 
+// ---------------------------------------------------------------- voice
+
+export const VOICE_TOKEN_URL = 'https://streaming.assemblyai.com/v3/token';
+export const VOICE_TOKEN_SECONDS = 60;
+export const VOICE_SESSION_SECONDS = 300;
+
+/**
+ * Speech to text needs AssemblyAI's key, which a browser cannot hold either.
+ * This mints a single-use streaming token that expires in a minute and allows
+ * one session of at most five minutes. The audio itself never passes through
+ * the relay: the browser streams it straight to AssemblyAI with the token, and
+ * receipts it on the device.
+ */
+export async function voiceToken(request, env, fetchImpl = fetch) {
+  if (request.method !== 'POST') return reply(405, 'POST only.');
+  const origins = (env.NOAI_ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const origin = request.headers.get('origin');
+  if (origins.length && !origins.includes(origin ?? '')) return reply(403, 'Origin not allowed.');
+  if (!env.ASSEMBLYAI_API_KEY) return reply(503, 'Voice is not configured on this relay.');
+  const client = request.headers.get('x-nf-client-connection-ip') ?? request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'local';
+  if (limited(`voice:${client}`)) return reply(429, 'Too many requests. Try again in a few minutes.');
+
+  const url = `${VOICE_TOKEN_URL}?expires_in_seconds=${VOICE_TOKEN_SECONDS}&max_session_duration_seconds=${VOICE_SESSION_SECONDS}`;
+  const headers = { authorization: env.ASSEMBLYAI_API_KEY };
+  // AssemblyAI's docs show both GET and POST for this endpoint; try GET, then POST.
+  let res = await fetchImpl(url, { method: 'GET', headers });
+  if (res.status === 405 || res.status === 404) res = await fetchImpl(url, { method: 'POST', headers });
+  const text = await res.text();
+  if (!res.ok) return reply(502, `The speech service answered ${res.status}.`);
+  let token;
+  try {
+    token = JSON.parse(text).token;
+  } catch {
+    token = undefined;
+  }
+  if (typeof token !== 'string' || !token) return reply(502, 'The speech service returned no token.');
+  return new Response(JSON.stringify({ token, expiresInSeconds: VOICE_TOKEN_SECONDS, maxSessionSeconds: VOICE_SESSION_SECONDS }), {
+    status: 200,
+    headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+  });
+}
+
 /** For tests. */
 export function _resetLimits() {
   hits.clear();

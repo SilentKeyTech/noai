@@ -5,6 +5,7 @@ import { loadEmbedder } from './lib/embedder.js';
 import { GateRefused } from './lib/gate.js';
 import { exportFiles, readLedger, readReceipts, verifyLedger } from './lib/ledger.js';
 import { idbStore } from './lib/store.js';
+import { listen, receiptVoice } from './lib/voice.js';
 import { ingestText, newOnly, parsePdfText } from './lib/core/ingest.js';
 import { addNote, closeVault, createVault, forgetNote, openVault, readDisclosure, readNotes, signerFingerprint, vaultExists } from './lib/vault.js';
 
@@ -142,14 +143,85 @@ $('ask').onclick = async () => {
       const who = r.fellBack ? ' · <span class="fell">answered by Nemotron Nano, because Nemotron Super did not answer in time</span>' : '';
       $('stats').innerHTML = `${r.used} passage${r.used === 1 ? '' : 's'} disclosed · chosen by ${r.retriever === 'hybrid' ? 'BM25 + on-device embeddings' : 'BM25'}${r.skill ? ` · skill: ${esc(SKILLS[r.skill].label.toLowerCase())}` : ''} · receipt #${r.entry.seq} · ${r.ms} ms round trip${who}`;
     }
+    if (spoken) {
+      $('stats').innerHTML += ` · <span class="voice">${esc(spoken)}</span>`;
+      const said = r.kind === 'memory' ? `Kept in your vault: ${r.note.body}` : r.answer;
+      if (!sayAloud(said.replace(/\*\*/g, '').replace(/\[P\d+\]/g, ''))) $('stats').innerHTML += ' · <span class="voice">no on-device voice in this browser, so the answer is not read aloud</span>';
+    }
   } catch (e) {
     $('answer').className = 'answer err';
     $('answer').textContent = e instanceof GateRefused ? e.message : `Not answered: ${e.message}`;
   }
   $('ask').disabled = false;
+  spoken = '';
   await refresh();
 };
 $('q').onkeydown = (e) => { if (e.key === 'Enter') $('ask').click(); };
+
+// Voice: speak a question, hear the answer. The audio goes to AssemblyAI and is receipted;
+// the answer is read aloud only by a voice that runs on this device, so it adds no second egress.
+let session = null;
+let spoken = '';
+function sayAloud(text) {
+  if (!('speechSynthesis' in window) || !text) return false;
+  const local = speechSynthesis.getVoices().filter((v) => v.localService);
+  const lang = /[\u0600-\u06FF]/.test(text) ? 'ar' : 'en';
+  const voice = local.find((v) => v.lang.toLowerCase().startsWith(lang)) ?? (lang === 'en' ? local[0] : undefined);
+  if (!voice) return false;
+  const u = new SpeechSynthesisUtterance(text);
+  u.voice = voice;
+  u.lang = voice.lang;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+  return true;
+}
+$('speak').onclick = async () => {
+  if (!vault) return;
+  if (!session) {
+    $('speak').disabled = true;
+    $('answer').className = 'answer';
+    $('answer').textContent = 'Listening. Everything you say now is streamed to AssemblyAI to be written down, and receipted. Press Stop when you are done.';
+    $('stats').textContent = '';
+    try {
+      session = await listen({ onPartial: (t) => ($('q').value = t) });
+      $('speak').textContent = 'Stop';
+      $('speak').classList.add('live');
+      $('speak').setAttribute('aria-pressed', 'true');
+    } catch (e) {
+      session = null;
+      $('answer').className = 'answer err';
+      $('answer').textContent = `Voice did not start: ${e.message}`;
+    }
+    $('speak').disabled = false;
+    return;
+  }
+  $('speak').disabled = true;
+  const s = session;
+  session = null;
+  $('speak').textContent = 'Speak';
+  $('speak').classList.remove('live');
+  $('speak').setAttribute('aria-pressed', 'false');
+  try {
+    const heard = await s.stop();
+    if (heard.audioBytes > 0) {
+      const { entry } = await receiptVoice(vault, heard);
+      spoken = `${(heard.audioBytes / 1024).toFixed(0)} KB of audio sent to AssemblyAI to be written down · receipt #${entry.seq}`;
+    }
+    if (!heard.transcript) {
+      $('answer').textContent = 'Nothing was heard.';
+      $('stats').textContent = spoken;
+      spoken = '';
+    } else {
+      $('q').value = heard.transcript;
+      $('ask').click();
+    }
+  } catch (e) {
+    $('answer').className = 'answer err';
+    $('answer').textContent = `Voice stopped: ${e.message}`;
+  }
+  $('speak').disabled = false;
+  await refresh();
+};
 
 $('seed').onclick = async () => {
   const notes = await (await fetch('./demo-notes.json')).json();

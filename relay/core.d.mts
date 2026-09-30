@@ -7,4 +7,12 @@ export declare function relay(
   env: Record<string, string | undefined>,
   fetchImpl?: (url: string, init: { method: string; headers: Record<string, string>; body: Uint8Array }) => Promise<Response>,
 ): Promise<Response>;
+export declare const VOICE_TOKEN_URL: string;
+export declare const VOICE_TOKEN_SECONDS: number;
+export declare const VOICE_SESSION_SECONDS: number;
+export declare function voiceToken(
+  request: Request,
+  env: Record<string, string | undefined>,
+  fetchImpl?: (url: string, init: { method: string; headers: Record<string, string> }) => Promise<Response>,
+): Promise<Response>;
 export declare function _resetLimits(): void;

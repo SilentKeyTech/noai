@@ -8,7 +8,7 @@
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize } from 'node:path';
-import { relay } from './core.mjs';
+import { relay, voiceToken } from './core.mjs';
 
 const root = normalize(join(new URL('../web/app/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')));
 const port = Number(process.env.PORT ?? process.env.NOAI_WEB_PORT ?? 7791);
@@ -17,6 +17,12 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '
 
 createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://local');
+  if (url.pathname === '/api/voice-token') {
+    const out = await voiceToken(new Request(`http://local${url.pathname}`, { method: req.method, headers: req.headers }), process.env);
+    res.writeHead(out.status, Object.fromEntries(out.headers));
+    res.end(Buffer.from(await out.arrayBuffer()));
+    return;
+  }
   if (url.pathname === '/api/chat') {
     const chunks = [];
     for await (const c of req) chunks.push(c);
@@ -33,7 +39,7 @@ createServer(async (req, res) => {
   res.writeHead(200, {
     'content-type': TYPES[extname(path)] ?? 'application/octet-stream',
     'cache-control': 'no-store',
-    'content-security-policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    'content-security-policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' wss://streaming.assemblyai.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
     'referrer-policy': 'no-referrer',
     'x-content-type-options': 'nosniff',
   });

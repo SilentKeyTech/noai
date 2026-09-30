@@ -57,6 +57,14 @@ Three reusable skills run through the same gate, redaction and receipts as any q
 
 If Nemotron 3 Super does not answer in time, or returns 429 or a 5xx, the same redacted passages go once to Nemotron 3 Nano. Every attempt that sent bytes is receipted, answered or not.
 
+## Voice
+
+Press **Speak**, ask out loud, press **Stop**. The microphone is read in the tab, downsampled to 16 kHz mono PCM and streamed in 50 ms frames to [AssemblyAI's streaming speech-to-text](https://www.assemblyai.com/docs/streaming/getting-started/transcribe-streaming-audio) (Universal-3 Pro). The formatted transcript becomes the question and goes through the gate like any typed one, so the model sees it redacted. The answer is read aloud only by a voice that runs on the device; if the browser has none, it is not read aloud.
+
+Audio is a disclosure, so it is receipted on the same chain: the receipt carries the SHA-256 of exactly the audio bytes that were streamed, their size, the endpoint and the hash of the transcript that came back. Audio cannot be redacted, and the receipt says so: everything said while listening is sent. The AssemblyAI key stays on the relay (`/api/voice-token`), which mints a one-minute, single-session token; the audio goes from the browser straight to AssemblyAI and never through the relay. `web/app/lib/voice.js` is the second of exactly two files in the browser build that send anything, and a test holds it to that one destination. Set `ASSEMBLYAI_API_KEY` on the relay to turn voice on.
+
+The voice files are licensed MIT OR Apache-2.0.
+
 ## Import
 
 A vault is only useful with your life in it, so NOAI reads the files you already have, on the device: a **WhatsApp chat export** (Android or iPhone, English or Arabic, one note per day of conversation), **.txt and .md** files (one note per heading), and **PDFs** with a text layer, including Arabic PDFs drawn one glyph at a time, which are put back in reading order. Importing sends nothing and writes no receipt, and importing the same file twice adds nothing. A scanned PDF with no text layer is refused with a plain message; text recognition is not built yet.

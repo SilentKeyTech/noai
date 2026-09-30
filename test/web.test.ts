@@ -165,11 +165,16 @@ describe('relay', () => {
 });
 
 describe('browser structure', () => {
-  it('only gate.js sends anything, and embedder.js only fetches its own model', () => {
+  it('only gate.js and voice.js send anything, voice.js only to AssemblyAI and its own token route, and embedder.js only fetches its own model', () => {
     const dir = new URL('../web/app/lib/', import.meta.url);
     const outbound = /\bfetch\s*\(|XMLHttpRequest|WebSocket|sendBeacon|EventSource/;
-    const offenders = readdirSync(dir).filter((f) => f.endsWith('.js') && !['gate.js', 'embedder.js'].includes(f) && outbound.test(readFileSync(new URL(f, dir), 'utf8')));
+    const offenders = readdirSync(dir).filter((f) => f.endsWith('.js') && !['gate.js', 'voice.js', 'embedder.js'].includes(f) && outbound.test(readFileSync(new URL(f, dir), 'utf8')));
     assert.deepEqual(offenders, []);
+    const voice = readFileSync(new URL('voice.js', dir), 'utf8');
+    assert.deepEqual([...voice.matchAll(/wss:\/\/[^/`'"$]+|\$\{VOICE_HOST\}/g)].map((m) => m[0]), ['${VOICE_HOST}']);
+    assert.match(voice, /export const VOICE_HOST = 'streaming\.assemblyai\.com';/);
+    assert.deepEqual([...voice.matchAll(/fetch\(([^,)]*)/g)].map((m) => m[1]), ['url']);
+    assert.match(voice, /tokenUrl = '\.\/api\/voice-token'/);
     const emb = readFileSync(new URL('embedder.js', dir), 'utf8');
     assert.deepEqual([...emb.matchAll(/fetch\(([^)]*)\)/g)].map((m) => m[1]), ['new URL(path, base']);
     assert.ok(!/method:\s*['"]POST/.test(emb));

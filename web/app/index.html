@@ -173,6 +173,8 @@
   .field input::placeholder { color: var(--field-ink); opacity: .6; }
   .field input:focus-visible { outline: none; }
   .field:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+  #speak { flex: 0 0 auto; }
+  #speak.live { outline: 2px solid var(--focus); outline-offset: 1px; font-weight: 600; }
   .primary { height: 46px; padding: 0 26px; border-radius: 12px; border: 0; background: var(--btn); color: var(--btn-ink); box-shadow: var(--btn-shadow); font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; white-space: nowrap; }
   button:disabled { opacity: .55; cursor: default; }
   .ghost { min-height: 44px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--ghost-edge); background: var(--ghost); color: var(--ink); font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; }
@@ -249,7 +251,8 @@
     .answer { font-size: 17px; }
     .field { flex-wrap: wrap; padding: 6px; }
     .field input { padding: 0 10px; flex-basis: 100%; }
-    .field .primary { width: 100%; }
+    .field .primary { flex: 1 1 0; }
+    .field #speak { flex: 1 1 0; }
   }
 </style>
 </head>
@@ -302,6 +305,7 @@
           <div class="modelload" id="modelload" role="status" aria-live="polite"><span id="modeltext">Loading the on-device search model, about 34 MB with its runtime. It never leaves this tab.</span><progress id="modelbar" max="100"></progress></div>
           <div class="field">
             <input id="q" placeholder="Ask anything, or start with &quot;remember that&quot; to keep a fact">
+            <button class="ghost" id="speak" type="button" aria-pressed="false" title="Speak a question. The audio goes to AssemblyAI to be written down, and is receipted.">Speak</button>
             <button class="primary" id="ask">Ask</button>
           </div>
           <div class="skills" id="skills" role="group" aria-label="Skills"></div>
