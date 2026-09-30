@@ -19,7 +19,7 @@ A personal assistant is only useful if it knows your life: your health notes, yo
                       │  picks the smallest set of relevant passages
                       ▼
                EGRESS GATE  (src/gate.ts, the only file allowed to use the network)
-                 1. redact    emails, phones, IBANs, cards, keys become [PHONE_1] etc.
+                 1. redact    names, emails, phones, IDs, IBANs, cards, keys become [PERSON_1] etc.
                  2. budget    refuse anything over the byte ceiling
                  3. hash      sha256 of the exact bytes about to leave
                  4. send  ──► NVIDIA Nemotron 3 Super on Nebius Token Factory
@@ -90,7 +90,7 @@ Proven by the code and the tests:
 - The vault file contains no readable note text (test: `vault stores nothing readable on disk`).
 - Only `src/gate.ts` can reach the network. A test scans every other source file and fails the build if one calls `fetch`, `https`, `net` or sockets.
 - The receipt hash equals the sha256 of the exact request body sent (test: `the receipt hash matches the exact bytes sent`).
-- Redacted values never appear in the outbound body (same test).
+- Redacted values never appear in the outbound body (same test). A name is hidden everywhere in one disclosure under one placeholder, so the question and the passages agree (test: `hides a name everywhere in one disclosure, under one placeholder, even when written short`).
 - Editing or deleting any ledger entry breaks verification at that entry (tests: `the ledger`).
 - Verification needs only `receipts.jsonl` and `ledger.jsonl`. No vault, no account, no network.
 - Retrieval understands meaning, on device: "who is my doctor?" finds the note that says GP, which BM25 alone misses (test: `hybrid finds the GP for "doctor", and sends nothing from other notes`).
@@ -106,7 +106,7 @@ Not proven, stated plainly:
 - A receipt is a signed statement by your device. It proves what your device sent and that the record was not altered afterwards. It cannot prove what the provider does with a request once it arrives.
 - Semantic retrieval is looser than keyword retrieval. Asked "who is my doctor?", the demo sends the GP line, the dentist memory and the allergy line from the same health note. Nothing from money, family or travel goes out, but the allergy line is a near miss the tape shows plainly.
 - Through a voice assistant, the assistant's provider already hears the spoken question and receives the answer it is handed. NOAI limits and records that handover; it cannot limit what the assistant does with it. Any kind allowed in `NOAI_MCP_REVEAL` is handed over in the clear.
-- The redactor is pattern based. It catches structured identifiers (emails, phone numbers, IBANs, card numbers, API keys, IP addresses), not names or free text. The passages it sends are the minimum needed, and the tape shows every word of them.
+- The redactor runs on the device with no model. It catches structured identifiers (emails, phone numbers, Saudi national ID and Iqama numbers, passport numbers, IBANs, card numbers, API keys, IP addresses, in Latin or Arabic digits) and names of people in English or Arabic when they are on its list of given names, follow a title or relation ("Dr.", "my brother", "السيد", "أخي") or were given to it by the owner. A name that is also a common word ("Grace from HR"), or an unusual name with nothing pointing at it, is sent as written. Dates and free text are sent. The passages it sends are the minimum needed, and the tape shows every word of them.
 
 ## Run it
 

@@ -164,7 +164,8 @@ describe('on-device embeddings', { skip: haveModel ? false : 'run npm run model 
     const { transport, sent } = fakeNebius('Dr. Nour Haddad. [P1]');
     const r = await ask(v, cfg(root), 'who is my doctor?', 3, transport, emb);
     assert.equal(r.retriever, 'hybrid');
-    assert.ok((sent[0] as string).includes('Nour Haddad'));
+    assert.ok(!(sent[0] as string).includes('Haddad'), "the doctor's name left the device");
+    assert.ok((sent[0] as string).includes('[PERSON_1]'));
     assert.ok(!(sent[0] as string).includes('850 USD'), 'an unrelated note left the device');
   });
 });

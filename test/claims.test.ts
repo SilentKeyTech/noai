@@ -143,13 +143,14 @@ describe('C3 the record of what left', () => {
 });
 
 describe('L the limits, proved rather than asserted', () => {
-  it('L1 names, dates and free text DO leave the device', async () => {
+  it('L1 dates, free text, and a name with no cue that is not on the list, DO leave the device', async () => {
     const root = await tmp();
     const v = await createVault(root, PASS);
-    await addNote(v, 'Family', 'My brother Sami turns 30 on 22 November.');
+    await addNote(v, 'House', 'Zorvath fixed the roof on 22 November, paid by my brother Sami.');
     const { transport, sent } = capture();
-    await ask(v, cfg(root), 'When is Sami birthday?', 3, transport);
-    for (const s of ['Sami', '22 November', 'brother']) assert.ok(sent[0]!.includes(s), `expected "${s}" to be sent`);
+    await ask(v, cfg(root), 'When did Zorvath fix the roof?', 3, transport);
+    for (const s of ['Zorvath', '22 November', 'roof', 'brother']) assert.ok(sent[0]!.includes(s), `expected "${s}" to be sent`);
+    assert.ok(!sent[0]!.includes('Sami'), 'a listed name after a cue was sent');
   });
 
   it('L2 a number written out in words is not recognised as a number', async () => {

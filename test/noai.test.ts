@@ -8,7 +8,7 @@ import { ask } from '../src/agent.ts';
 import { sha256 } from '../src/crypto.ts';
 import { type GateConfig, stripThinking, type Transport } from '../src/gate.ts';
 import { ledgerPath, readLedger, readReceipts, verifyLedger } from '../src/ledger.ts';
-import { redact, rehydrate } from '../src/redact.ts';
+import { redact, redactAll, rehydrate } from '../src/redact.ts';
 import { Bm25Retriever, chunkNote } from '../src/retrieve.ts';
 import { addNote, createVault, openVault, readDisclosure, readNotes } from '../src/vault.ts';
 
@@ -74,6 +74,76 @@ describe('redaction', () => {
   });
 });
 
+describe('redaction of names and Saudi identifiers', () => {
+  const roundTrip = (input: string): ReturnType<typeof redact> => {
+    const r = redact(input);
+    assert.equal(rehydrate(r.text, r.map), input);
+    return r;
+  };
+
+  it('hides a name everywhere in one disclosure, under one placeholder, even when written short', () => {
+    const r = redactAll(['When is Sami birthday?', 'My brother Sami Haddad turns 30 on 22 November.']);
+    const [q = '', p = ''] = r.texts;
+    assert.ok(!q.includes('Sami') && !p.includes('Sami') && !p.includes('Haddad'));
+    assert.equal(q, 'When is [PERSON_1] birthday?');
+    assert.equal(p, 'My brother [PERSON_1] turns 30 on 22 November.');
+    assert.deepEqual(r.counts, { PERSON: 1 });
+  });
+
+  it('takes a name that is not on the list when a title or relation points at it', () => {
+    const r = roundTrip('GP is Dr. Zeferino Okafor. My lawyer is Brannigan. My landlord, Quist, wants rent.');
+    for (const s of ['Zeferino', 'Okafor', 'Brannigan', 'Quist']) assert.ok(!r.text.includes(s), s);
+    assert.deepEqual(r.counts, { PERSON: 3 });
+  });
+
+  it('follows name chains: Abu, bin, Al-', () => {
+    const r = roundTrip('Abu Omar met Fahad bin Salman Al-Otaibi at noon.');
+    assert.equal(r.text, '[PERSON_1] met [PERSON_2] at noon.');
+  });
+
+  it('hides Arabic names with the family name, and a phone number written in Arabic digits', () => {
+    const r = roundTrip('أخي سامي الزهراني رقمه ٠٥٥١٢٣٤٥٦٧');
+    assert.equal(r.text, 'أخي [PERSON_1] رقمه [PHONE_1]');
+    assert.deepEqual(r.counts, { PHONE: 1, PERSON: 1 });
+  });
+
+  it('finds an Arabic name with a prefix attached, and after a title', () => {
+    const r = roundTrip('اتصل بمحمد غدا، وموعدي مع الدكتورة رزان العتيبي.');
+    assert.equal(r.text, 'اتصل ب[PERSON_1] غدا، وموعدي مع الدكتورة [PERSON_2].');
+  });
+
+  it('hides Saudi national ID and Iqama numbers, Saudi IBANs and Saudi phone formats', () => {
+    const r = roundTrip('ID 1012345678, Iqama 2123456789, IBAN SA03 8000 0000 6080 1016 7519, mobile 0551234567 or +966 55 123 4567.');
+    for (const s of ['1012345678', '2123456789', 'SA03', '0551234567', '123 4567']) assert.ok(!r.text.includes(s), s);
+    assert.deepEqual(r.counts, { IBAN: 1, ID: 2, PHONE: 2 });
+  });
+
+  it('leaves words that are also names alone, when nothing marks them as a name', () => {
+    assert.deepEqual(redact('Will you mark the bill in May? The grace period ends Friday.').counts, {});
+    assert.deepEqual(redact('زوجتي قالت إن الموعد غدا في المستشفى').counts, {});
+  });
+
+  it('keeps places named after people, and hides passport numbers', () => {
+    assert.deepEqual(redact('The King Fahd Road office, near Prince Sultan University.').counts, {});
+    assert.deepEqual(redact('موعد في مستشفى الملك فيصل، شارع الأمير محمد').counts, {});
+    const r = roundTrip('Passport N1234567 expires March 2029. Ask Hassan.');
+    assert.equal(r.text, 'Passport [PASSPORT_1] expires March 2029. Ask [PERSON_1].');
+  });
+
+  it('gives a shared family name its own placeholder instead of guessing whose it is', () => {
+    const r = roundTrip('Nour Haddad and Sami Haddad came. The Haddad house is blue.');
+    assert.ok(!r.text.includes('Haddad'));
+    assert.deepEqual(r.counts, { PERSON: 3 });
+  });
+
+  it('always hides the people the owner lists, in any script', () => {
+    const r = roundTrip('Zorvath and زكرياوي fixed the roof.');
+    assert.deepEqual(r.counts, {});
+    const listed = redact('Zorvath and زكرياوي fixed the roof.', { people: ['Zorvath', 'زكرياوي'] });
+    assert.equal(listed.text, '[PERSON_1] and [PERSON_2] fixed the roof.');
+  });
+});
+
 describe('retrieval runs on device', () => {
   it('ranks the right note first', () => {
     const notes = [
@@ -121,7 +191,8 @@ describe('the gate', () => {
     assert.ok(!body.includes('Penicillin'), 'an irrelevant note left the device');
     assert.equal(r.signed.receipt.payloadHash, sha256(body));
     assert.equal(r.signed.receipt.payloadBytes, Buffer.byteLength(body));
-    assert.deepEqual(r.signed.receipt.redactions, { PHONE: 1 });
+    assert.ok(!body.includes('Sami'), 'the name left the device');
+    assert.deepEqual(r.signed.receipt.redactions, { PHONE: 1, PERSON: 1 });
     assert.equal(r.answer, 'Sami turns 30 on 22 November, call +961 70 123 456. [P1]');
     assert.equal(readDisclosure(v, r.signed.receipt.receiptId), r.disclosed);
   });
