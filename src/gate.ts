@@ -89,12 +89,14 @@ export async function disclose(
   question: string,
   chunks: Chunk[],
   transport: Transport = httpTransport,
+  /** names to always hide, found in the vault on the device */
+  people: string[] = [],
 ): Promise<GateResult> {
   const started = Date.now();
   if (!cfg.apiKey) throw new GateRefused('NEBIUS_API_KEY is not set. Nothing was sent.');
 
   // 1. redact, with one placeholder space across question and passages
-  const red = prepareDisclosure(question, chunks);
+  const red = prepareDisclosure(question, chunks, people);
   const disclosed = red.disclosed;
   const url = `${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`;
 

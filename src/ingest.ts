@@ -11,6 +11,8 @@
  *  - Plain text and Markdown: one note per heading, or one note per file.
  *  - PDF: the caller extracts the text layer (src/pdf.ts, web/app/lib/pdf.js)
  *    and passes it here; one note per file.
+ *  - Contacts (.vcf): one note per contact. The names become people the
+ *    redactor always hides (src/people.ts).
  */
 
 export interface NoteDraft {
@@ -18,7 +20,7 @@ export interface NoteDraft {
   body: string;
 }
 
-export type Format = 'whatsapp' | 'text' | 'pdf';
+export type Format = 'whatsapp' | 'text' | 'pdf' | 'contacts';
 
 export interface Ingested {
   format: Format;
@@ -227,11 +229,108 @@ export function parsePdfText(pages: string[], fileName: string): Ingested {
   return { format: 'pdf', notes: [{ title, body }], warnings: [] };
 }
 
+// ---------------------------------------------------------------- contacts
+
+export function looksLikeVcard(text: string): boolean {
+  return /^BEGIN:VCARD\s*$/im.test(clean(text));
+}
+
+/** vCard 2.1 quoted-printable, as Android writes Arabic names: =D8=B3=D8=A7... */
+function decodeQp(value: string, charset: string): string {
+  const bytes: number[] = [];
+  for (let i = 0; i < value.length; i++) {
+    const hex = value.slice(i + 1, i + 3);
+    if (value[i] === '=' && /^[0-9A-Fa-f]{2}$/.test(hex)) {
+      bytes.push(parseInt(hex, 16));
+      i += 2;
+    } else {
+      bytes.push(value.charCodeAt(i) & 0xff);
+    }
+  }
+  try {
+    return new TextDecoder(charset || 'utf-8').decode(new Uint8Array(bytes));
+  } catch {
+    return new TextDecoder('utf-8').decode(new Uint8Array(bytes));
+  }
+}
+
+const unescapeV = (s: string): string => s.replace(/\\([nN,;\\])/g, (_, c: string) => (c === 'n' || c === 'N' ? ' ' : c));
+
+/** One component list of a structured value (N, ORG, ADR), split on unescaped semicolons. */
+const parts = (s: string): string[] => s.split(/(?<!\\);/).map((p) => unescapeV(p).trim());
+
+/**
+ * A contacts export (.vcf, vCard 2.1, 3.0 or 4.0, from Android, iPhone or
+ * Google Contacts): one note per contact. The note body starts with a
+ * "Name:" line, which is how src/people.ts knows whose name to always hide.
+ */
+export function parseVcard(text: string): Ingested {
+  // Unfold: a line starting with a space or tab continues the one before (RFC 6350),
+  // and a quoted-printable line ending in = continues on the next.
+  const lines: string[] = [];
+  for (const raw of clean(text).split('\n')) {
+    const prev = lines[lines.length - 1];
+    if (prev !== undefined && /^[ \t]/.test(raw)) lines[lines.length - 1] = prev + raw.slice(1);
+    else if (prev !== undefined && /QUOTED-PRINTABLE/i.test(prev.split(':')[0] ?? '') && prev.endsWith('=')) lines[lines.length - 1] = prev.slice(0, -1) + raw;
+    else lines.push(raw);
+  }
+  const notes: NoteDraft[] = [];
+  let card: Record<string, string[]> | null = null;
+  for (const line of lines) {
+    if (/^BEGIN:VCARD$/i.test(line.trim())) {
+      card = {};
+      continue;
+    }
+    if (/^END:VCARD$/i.test(line.trim())) {
+      if (card) {
+        const n = parts(card.N?.[0] ?? '');
+        const fromN = [n[3], n[1], n[2], n[0], n[4]].filter(Boolean).join(' ');
+        const name = (card.FN?.[0] ?? '').trim() || fromN;
+        const body: string[] = [];
+        if (name) body.push(`Name: ${name}`);
+        for (const t of card.TEL ?? []) body.push(`Phone: ${t}`);
+        for (const e of card.EMAIL ?? []) body.push(`Email: ${e}`);
+        const org = parts(card.ORG?.[0] ?? '').filter(Boolean).join(', ');
+        if (org) body.push(`Organisation: ${org}`);
+        if (card.TITLE?.[0]) body.push(`Job title: ${unescapeV(card.TITLE[0])}`);
+        if (card.BDAY?.[0]) body.push(`Birthday: ${card.BDAY[0]}`);
+        for (const a of card.ADR ?? []) {
+          const adr = parts(a).filter(Boolean).join(', ');
+          if (adr) body.push(`Address: ${adr}`);
+        }
+        for (const x of card.NOTE ?? []) body.push(`Note: ${unescapeV(x)}`);
+        const label = name || org || card.TEL?.[0] || card.EMAIL?.[0];
+        if (label && body.length > 0) notes.push({ title: `Contact: ${label}`, body: body.join('\n') });
+      }
+      card = null;
+      continue;
+    }
+    if (!card) continue;
+    const colon = line.indexOf(':');
+    if (colon <= 0) continue;
+    const head = line.slice(0, colon).split(';');
+    const prop = (head[0] ?? '').replace(/^[^.]*\./, '').toUpperCase();
+    const params = head.slice(1).map((p) => p.toUpperCase());
+    let value = line.slice(colon + 1);
+    if (params.some((p) => p === 'QUOTED-PRINTABLE' || p === 'ENCODING=QUOTED-PRINTABLE')) {
+      const cs = params.find((p) => p.startsWith('CHARSET='))?.slice(8) ?? 'utf-8';
+      value = decodeQp(value, cs.toLowerCase());
+    }
+    value = value.trim();
+    if (!value || !['FN', 'N', 'TEL', 'EMAIL', 'ORG', 'TITLE', 'BDAY', 'ADR', 'NOTE'].includes(prop)) continue;
+    if (prop !== 'N' && prop !== 'ORG' && prop !== 'ADR' && prop !== 'NOTE' && prop !== 'TITLE') value = unescapeV(value);
+    (card[prop] ??= []).push(value);
+  }
+  const warnings = notes.length === 0 ? ['No contacts were found. Export them from your phone or Google Contacts as a .vcf file.'] : [];
+  return { format: 'contacts', notes, warnings };
+}
+
 // ---------------------------------------------------------------- one entry point
 
 /** Decide the format from the name and the content, for anything that is already text. */
 export function ingestText(text: string, fileName: string): Ingested {
   if (/\.pdf$/i.test(fileName)) throw new Error('A PDF must be read with the PDF reader first, then passed to parsePdfText.');
+  if (/\.vcf$/i.test(fileName) || looksLikeVcard(text)) return parseVcard(text);
   if (looksLikeWhatsApp(text)) return parseWhatsApp(text, chatNameFrom(fileName));
   return parseText(text, fileName);
 }

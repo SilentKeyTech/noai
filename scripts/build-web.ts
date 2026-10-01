@@ -16,7 +16,7 @@ import { MODEL, modelDir } from '../src/embed.ts';
 
 const root = new URL('../', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 const app = join(root, 'web', 'app');
-const PURE = ['names', 'redact', 'ingest', 'retrieve', 'vector', 'prompt', 'memory', 'skills'];
+const PURE = ['names', 'redact', 'people', 'ingest', 'retrieve', 'vector', 'prompt', 'memory', 'skills'];
 
 // 1. pure modules
 const coreDir = join(app, 'lib', 'core');

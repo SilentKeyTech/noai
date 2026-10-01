@@ -11,7 +11,9 @@
  *  - names of people, in Latin or Arabic script, found by a name list, by cue
  *    words ("my brother", "Dr.", "أخي", "السيد") and by name chains (bin, Al-,
  *    أبو, عبد). A name found anywhere in a disclosure is hidden everywhere in
- *    it, so the question and the passages agree on [PERSON_1].
+ *    it, so the question and the passages agree on [PERSON_1]. The caller can
+ *    add the people the vault already knows (src/people.ts), so a name pointed
+ *    at in one note is hidden in another where nothing points at it.
  */
 import {
   ARABIC_PREFIXES,
@@ -278,6 +280,11 @@ function findNames(text: string): { key: string; surface: string }[] {
   return found;
 }
 
+/** Every name the finder sees in one text, as written. Used to learn names from the whole vault. */
+export function findPeople(text: string): string[] {
+  return findNames(text).map((f) => f.surface);
+}
+
 /** Pass two: every occurrence of a known name, full or by one of its parts, in one text. */
 function locateNames(text: string, keys: string[][], alias: Map<string, string>): Span[] {
   const known = new Set(alias.keys());
@@ -286,6 +293,7 @@ function locateNames(text: string, keys: string[][], alias: Map<string, string>)
   const spans: Span[] = [];
   let i = 0;
   outer: while (i < tok.length) {
+    // King Fahd Road stays a road even when Fahd is a known person.
     for (const key of keys) {
       if (key.length < 2 || tok[i]!.n !== key[0]) continue;
       let ok = true;
@@ -297,14 +305,16 @@ function locateNames(text: string, keys: string[][], alias: Map<string, string>)
           break;
         }
       }
-      if (ok) {
+      if (ok && !isPlace(text, tok, i, i + key.length - 1)) {
         spans.push({ from: tok[i]!.cs, to: tok[i + key.length - 1]!.e, key: key.join(' ') });
         i += key.length;
         continue outer;
       }
     }
-    const single = alias.get(tok[i]!.n);
-    if (single) spans.push({ from: tok[i]!.cs, to: tok[i]!.e, key: single });
+    // A known name that is also a function word (a contact called Will or May)
+    // is hidden as part of the full name, never as the word on its own.
+    const single = isStop(tok[i]!) ? undefined : alias.get(tok[i]!.n);
+    if (single && !isPlace(text, tok, i, i)) spans.push({ from: tok[i]!.cs, to: tok[i]!.e, key: single });
     i += 1;
   }
   return spans;

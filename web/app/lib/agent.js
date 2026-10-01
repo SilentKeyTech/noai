@@ -3,6 +3,7 @@
  * answered through the gate. Mirrors src/agent.ts, using the same shared core.
  */
 import { MEMORY_TITLE, minimalSet, rememberIntent, splitMemories } from './core/memory.js';
+import { peopleFromNotes } from './core/people.js';
 import { Bm25Retriever, HybridRetriever } from './core/retrieve.js';
 import { detectSkill, skillQuestion, splitReminders } from './core/skills.js';
 import { disclose, httpTransport } from './gate.js';
@@ -19,7 +20,8 @@ export async function ask(v, cfg, question, { embedder = null, transport = httpT
   // Ranking uses the owner's words, never the task line a skill adds.
   const hits = limit === 0 ? [] : embedder ? await new HybridRetriever(notes, embedder).search(question, limit * 2) : new Bm25Retriever(notes).search(question, limit * 2);
   const chosen = minimalSet(hits, limit).map((h) => h.chunk);
-  const result = await disclose(v, cfg, skill ? skillQuestion(skill, question) : question, chosen, transport);
+  // Every person the vault names is hidden, not only those the chosen passages point at.
+  const result = await disclose(v, cfg, skill ? skillQuestion(skill, question) : question, chosen, transport, peopleFromNotes(notes));
   const split = splitReminders(result.answer);
   const { answer, facts } = splitMemories(split.answer);
   const remembered = [];
