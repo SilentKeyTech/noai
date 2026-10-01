@@ -10,7 +10,7 @@
  */
 
 /** Arabic letters are compared without diacritics or tatweel, with every alef form as ا and ة as ه. */
-export function normToken(raw: string): string {
+function normBase(raw: string): string {
   const s = raw.normalize('NFKC');
   if (/[\u0600-\u06FF]/.test(s)) {
     return s
@@ -22,6 +22,77 @@ export function normToken(raw: string): string {
       .replace(/ک/g, 'ك');
   }
   return s.toLowerCase().replace(/’/g, "'");
+}
+
+/**
+ * Spellings of one name, in Latin and Arabic script, counted as one name:
+ * Mohd, Mhmd, Mohammed and محمد are the same person to the redactor, and every
+ * spelling here is a given name. The first word of each line is the one used
+ * as the key. A spelling that is also an everyday word (Said, Rim) is left out.
+ */
+const SPELLINGS = `
+muhammad mohammed mohamed mohammad mohamad muhammed mohamd mohammd muhamad muhamed mohd mhd mhmd mohmd muhd mhmmd محمد
+ahmad ahmed ahmet ehmed احمد
+mahmoud mahmood mahmud mahmut محمود
+mustafa moustafa mostafa mostapha mustapha مصطفى مصطفي
+abdullah abdallah abdulla abdellah abdalla abdullahi عبدالله
+abdulrahman abdelrahman abdurrahman abdalrahman abdul-rahman abdel-rahman عبدالرحمن
+abdulaziz abdelaziz abdalaziz abdul-aziz abdel-aziz عبدالعزيز
+khalid khaled خالد
+youssef yousef yusuf yousif yusef youcef yousuf يوسف
+hussein husain hussain hossein husein houssein حسين
+hassan hasan hassen
+omar umar omer عمر
+othman uthman osman usman عثمان
+ibrahim ebrahim ibraheem ابراهيم
+ismail ismael ismaeel اسماعيل
+faisal faysal feisal فيصل
+fahad fahd فهد
+nasser naser nasir nassir ناصر
+tariq tarek tareq tarik طارق
+walid waleed وليد
+majed majid maged ماجد
+ziad ziyad zyad زياد
+zaid zayd zeid زيد
+salman selman سلمان
+sultan soltan سلطان
+hamza hamzah hamzeh حمزه
+bilal belal بلال
+yahya yehia yahia يحيى يحيي
+yasser yaser yasir yassir ياسر
+osama usama ousama اسامه
+fatima fatma fatimah fatema فاطمه
+aisha aicha ayesha aishah aysha عائشه
+khadija khadijah khadeeja خديجه
+maryam mariam meriem myriam مريم
+zainab zeinab zaynab zaineb زينب
+noura nora norah nourah نوره
+layla laila leila leyla ليلى ليلي
+sara sarah ساره
+reem reema ريم
+huda hoda هدى
+yasmin yasmine yasmeen ياسمين
+hessa hissa حصه
+`;
+
+const SPELLING = new Map<string, string>();
+for (const line of SPELLINGS.trim().split('\n')) {
+  const forms = line.trim().split(/\s+/).map(normBase);
+  for (const f of forms) SPELLING.set(f, forms[0]!);
+}
+
+/** One spelling family's key, or the word itself. */
+export const canonName = (n: string): string => SPELLING.get(n) ?? n;
+
+/** A word as the redactor compares it: normalised, and folded to its spelling family. */
+export function normToken(raw: string): string {
+  return canonName(normBase(raw));
+}
+
+/** Every spelling NOAI knows in the family a word belongs to. */
+export function spellingsOf(raw: string): string[] {
+  const key = normToken(raw);
+  return [...SPELLING].filter(([, k]) => k === key).map(([f]) => f);
 }
 
 const words = (s: string): Set<string> => new Set(s.trim().split(/\s+/).map(normToken));
