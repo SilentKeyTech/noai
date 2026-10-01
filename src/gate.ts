@@ -17,7 +17,7 @@
 import { newId, sha256 } from './crypto.ts';
 import { append } from './ledger.ts';
 import { DEFAULT_MODEL, FAST_MODEL, prepareDisclosure, requestBody, stripThinking } from './prompt.ts';
-import { rehydrate } from './redact.ts';
+import { type RedactOptions, rehydrate } from './redact.ts';
 
 export { buildPrompt, DEFAULT_MODEL, FAST_MODEL, stripThinking } from './prompt.ts';
 import type { Chunk, DisclosureReceipt, LedgerEntry, Placement, SecretUseReceipt, SignedDisclosure } from './types.ts';
@@ -94,6 +94,8 @@ export async function disclose(
   question: string,
   chunks: Chunk[],
   transport: Transport = httpTransport,
+  /** names to always hide and other names for them, found in the vault on the device */
+  known: RedactOptions = {},
 ): Promise<GateResult> {
   const started = Date.now();
   if (!cfg.apiKey) throw new GateRefused('NEBIUS_API_KEY is not set. Nothing was sent.');
@@ -106,7 +108,7 @@ export async function disclose(
     chunks = chunks.map((c) => ({ ...c, text: redactSecrets(c.text, secrets).text }));
     for (const s of secrets) scrub(s.value);
   }
-  const red = prepareDisclosure(question, chunks);
+  const red = prepareDisclosure(question, chunks, known);
   const disclosed = red.disclosed;
   const url = `${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`;
 

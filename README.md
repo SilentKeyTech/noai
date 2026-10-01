@@ -69,11 +69,40 @@ The voice files are licensed MIT OR Apache-2.0.
 
 A vault is only useful with your life in it, so NOAI reads the files you already have, on the device: a **WhatsApp chat export** (Android or iPhone, English or Arabic, one note per day of conversation), **.txt and .md** files (one note per heading), and **PDFs** with a text layer, including Arabic PDFs drawn one glyph at a time, which are put back in reading order. Importing sends nothing and writes no receipt, and importing the same file twice adds nothing. A scanned PDF with no text layer is refused with a plain message; text recognition is not built yet.
 
+**Contacts (.vcf)** from a phone or Google Contacts become one note per person, including Android exports where Arabic names are stored encoded. Every name in them is then hidden in every disclosure (see [Names](#names)).
+
 ```bash
-npm run noai -- import "WhatsApp Chat with Sami.txt" lease.pdf notes.md
+npm run noai -- import "WhatsApp Chat with Sami.txt" lease.pdf notes.md contacts.vcf
+npm run noai -- people          # list, on this machine, every name that will always be hidden
 ```
 
-In the browser, **+ Import files** under the vault does the same in the tab. pdf.js is vendored and served from the same origin; it is given the bytes, never a URL.
+In the browser, **+ Import files** under the vault does the same in the tab, with the same parser. pdf.js is vendored and served from the same origin; it is given the bytes, never a URL. The browser file picker does not offer .vcf files yet; contacts import is in the command line for now.
+
+## Names
+
+Names of people are hidden on the device as `[PERSON_1]`, `[PERSON_2]` and put back on the device when the answer comes in, exactly like phone numbers. There is no model involved: a fixed list of common English and Arabic given names, cue words ("Dr.", "my brother", "السيد", "أخي"), name chains ("bin", "Al-", "أبو", "عبد"), and the vault itself.
+
+Before every disclosure NOAI reads the whole vault on the device and collects every person it names: names the rules above find in any note, the people who wrote in an imported WhatsApp chat, and imported contacts. Those names are hidden in whatever is sent, even in a passage where nothing points at them. So "My accountant is Zorbek Tamarind" in one note means "Zorbek paid the deposit" in another goes out as "[PERSON_1] paid the deposit". The list is rebuilt for each question and never stored or sent.
+
+Spellings count as one person. For about forty common Arabic names, the usual English spellings and short forms and the Arabic script are one name: Mohd, Mhmd, Mohmd, Mhd, Mohammed, Muhammad and محمد all become the same `[PERSON_1]`, and each of them is hidden even when nothing points at it. For anyone else, teach it in a note or a memory, in English or Arabic, and both names are hidden as one person:
+
+```text
+remember that Hamoudi is short for Mohammed Haddad
+remember that Zizou is a nickname for Ziad Karam
+حمودي اختصار لمحمد
+```
+
+A nickname saved on an imported contact works the same way. `noai people` lists what it has learned.
+
+Two things a known name does not swallow: a place named after a person ("King Fahd Road", "مستشفى الملك فيصل") stays as written, and a contact called Will or May hides the full name but not the everyday word "will" or "may".
+
+What it does not do, stated plainly:
+
+- A name that no note points at, that is not a common given name, and that is not in your imported contacts is sent as written (test: `LIMIT: a name the vault never points at and no contact holds still leaves the device`).
+- It can hide too much. A contact called Grace also hides "grace" in "the grace period", and a word wrongly taken for a name after a cue ("my boss Approved") is hidden everywhere in the vault after that. Over-hiding costs answer quality, not privacy.
+- A spelling that is not in its built-in list and that you have not taught it is a different name. A typo ("Mohamemd") is not recognised.
+- Built-in spellings are joined by name, not by person: two different people called Mohd and Mohammed with no family name share one placeholder.
+- It hides who, not what. Dates, places, amounts and free text that describes a person ("the tall man from the bank") are sent.
 
 ## Memory
 
@@ -132,6 +161,7 @@ Proven by the code and the tests:
 - Only `src/gate.ts` can reach the network. A test scans every other source file and fails the build if one calls `fetch`, `https`, `net` or sockets.
 - The receipt hash equals the sha256 of the exact request body sent (test: `the receipt hash matches the exact bytes sent`).
 - Redacted values never appear in the outbound body (same test). A name is hidden everywhere in one disclosure under one placeholder, so the question and the passages agree (test: `hides a name everywhere in one disclosure, under one placeholder, even when written short`).
+- A name the vault points at once, or holds as a contact, is hidden in a passage where nothing points at it, in English and Arabic, on the desktop and in the browser build (tests: `test/people.test.ts`).
 - Editing or deleting any ledger entry breaks verification at that entry (tests: `the ledger`).
 - Verification needs only `receipts.jsonl` and `ledger.jsonl`. No vault, no account, no network.
 - Retrieval understands meaning, on device: "who is my doctor?" finds the note that says GP, which BM25 alone misses (test: `hybrid finds the GP for "doctor", and sends nothing from other notes`).
@@ -149,7 +179,7 @@ Not proven, stated plainly:
 - A receipt is a signed statement by your device. It proves what your device sent and that the record was not altered afterwards. It cannot prove what the provider does with a request once it arrives.
 - Semantic retrieval is looser than keyword retrieval. Asked "who is my doctor?", the demo sends the GP line, the dentist memory and the allergy line from the same health note. Nothing from money, family or travel goes out, but the allergy line is a near miss the tape shows plainly.
 - Through a voice assistant, the assistant's provider already hears the spoken question and receives the answer it is handed. NOAI limits and records that handover; it cannot limit what the assistant does with it. Any kind allowed in `NOAI_MCP_REVEAL` is handed over in the clear.
-- The redactor runs on the device with no model. It catches structured identifiers (emails, phone numbers, Saudi national ID and Iqama numbers, passport numbers, IBANs, card numbers, API keys, IP addresses, in Latin or Arabic digits) and names of people in English or Arabic when they are on its list of given names, follow a title or relation ("Dr.", "my brother", "السيد", "أخي") or were given to it by the owner. A name that is also a common word ("Grace from HR"), or an unusual name with nothing pointing at it, is sent as written. Dates and free text are sent. The passages it sends are the minimum needed, and the tape shows every word of them.
+- The redactor runs on the device with no model. It catches structured identifiers (emails, phone numbers, Saudi national ID and Iqama numbers, passport numbers, IBANs, card numbers, API keys, IP addresses, in Latin or Arabic digits) and names of people in English or Arabic when they are on its list of given names, follow a title or relation ("Dr.", "my brother", "السيد", "أخي"), are named that way anywhere in the vault, or are in the owner's imported contacts. An unusual name that nothing in the vault points at and no contact holds is sent as written (see [Names](#names)). Dates and free text are sent. The passages it sends are the minimum needed, and the tape shows every word of them.
 
 ## Run it
 
@@ -160,7 +190,7 @@ git clone https://github.com/SilentKeyTech/noai && cd noai
 npm install                     # onnxruntime-web, plus typescript for dev
 npm run model                   # one time: fetch the 23 MB embedding model, hash checked
 echo NEBIUS_API_KEY=your_key > .env
-npm test                        # 69 tests, no network
+npm test                        # 115 tests, no network
 npm run serve                   # http://127.0.0.1:7788
 ```
 

@@ -1,5 +1,5 @@
 /**
- * noai init | seed | add <title> <text> | import <file...> | remember <fact> | ask <question> | tape | verify | serve
+ * noai init | seed | add <title> <text> | import <file...> | remember <fact> | people | ask <question> | tape | verify | serve
  *
  * The passphrase comes from NOAI_PASSPHRASE. The Nebius key from NEBIUS_API_KEY
  * (npm scripts load .env, which is gitignored).
@@ -9,8 +9,9 @@ import { ask, remember } from './agent.ts';
 import { configFromEnv } from './gate.ts';
 import { importFile } from './importer.ts';
 import { noaiHome } from './home.ts';
+import { knownPeople } from './people.ts';
 import { readLedger, readReceipts, verifyLedger } from './ledger.ts';
-import { addNote, closeVault, createVault, openVault, signerFingerprint } from './vault.ts';
+import { addNote, closeVault, createVault, openVault, readNotes, signerFingerprint } from './vault.ts';
 
 const [cmd, ...args] = process.argv.slice(2);
 const root = noaiHome();
@@ -47,7 +48,7 @@ async function main(): Promise<void> {
       return;
     }
     case 'import': {
-      if (args.length === 0) throw new Error('Usage: noai import <file...>  (WhatsApp .txt export, .txt, .md or .pdf)');
+      if (args.length === 0) throw new Error('Usage: noai import <file...>  (WhatsApp .txt export, contacts .vcf, .txt, .md or .pdf)');
       const v = await openVault(root, passphrase());
       for (const f of args) {
         const r = await importFile(v, f);
@@ -65,6 +66,18 @@ async function main(): Promise<void> {
       const v = await openVault(root, passphrase());
       const r = await remember(v, fact);
       console.log(`Sealed memory ${r.note.id}. Nothing was sent.`);
+      closeVault(v);
+      return;
+    }
+    case 'people': {
+      // Printed here, on this machine, for the owner to check. Nothing is sent.
+      const v = await openVault(root, passphrase());
+      const { people, same } = knownPeople(readNotes(v));
+      console.log(`${String(people.length)} people named in the vault are always hidden as [PERSON_n] before anything is sent:`);
+      for (const p of people) console.log(`  ${p}`);
+      if (same.length) console.log('Other names you taught, hidden as the same person:');
+      for (const [other, name] of same) console.log(`  ${other} = ${name}`);
+      console.log('A name not on this list is hidden only when the text points at it. Import contacts (.vcf) to add people, or teach a spelling: remember that Mhmd is short for Mohammed Haddad.');
       closeVault(v);
       return;
     }
@@ -100,7 +113,7 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      console.log('noai init | seed | add <title> <text> | remember <fact> | ask <question> | tape | verify | serve');
+      console.log('noai init | seed | add <title> <text> | import <file...> | remember <fact> | people | ask <question> | tape | verify | serve');
   }
 }
 
