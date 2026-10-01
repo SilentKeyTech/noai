@@ -116,7 +116,7 @@
   html { background: var(--page); background-attachment: fixed; min-height: 100%; }
   body { margin: 0; min-height: 100vh; color: var(--ink); font: 15px/1.5 var(--font); }
   .mono, code, pre { font-family: var(--mono); }
-  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
   .glass { position: relative; overflow: hidden; background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 22px;
@@ -138,12 +138,13 @@
   .themes button { width: 44px; height: 44px; padding: 8px; border: 0; background: none; cursor: pointer; border-radius: 999px; }
   .themes button span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 999px; border: 1px solid rgba(0,0,0,.25); font: 700 10px var(--mono); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
   .themes button[aria-pressed="true"] span { box-shadow: 0 0 0 2px var(--ink); }
-  .sw-auto { background: linear-gradient(135deg, #F25C05 50%, #FFEBD8 50%); }
-  .sw-orange-dark { background: #F25C05; }
-  .sw-orange-light { background: #FFD2A1; }
-  .sw-purple-dark { background: #130A2C; }
-  .sw-purple-light { background: #C9B6FF; }
-  .sw-sky { background: #A9DDFF; }
+  /* Each swatch is a small cut of that theme's base. */
+  .sw-auto { background: linear-gradient(135deg, #FF8A1F 0%, #F25C05 49.5%, #FFE0C0 50.5%, #FFB070 100%); }
+  .sw-orange-dark { background: radial-gradient(circle at 25% 20%, #FFB54D, rgba(255,181,77,0) 70%), radial-gradient(circle at 85% 90%, #D03400, rgba(208,52,0,0) 70%), #F25C05; }
+  .sw-orange-light { background: radial-gradient(circle at 25% 20%, #FFD2A1, rgba(255,210,161,0) 70%), radial-gradient(circle at 85% 90%, #FF9A4D, rgba(255,154,77,0) 70%), #FFEBD8; }
+  .sw-purple-dark { background: radial-gradient(circle at 25% 15%, #4A2799, rgba(74,39,153,0) 75%), #130A2C; }
+  .sw-purple-light { background: radial-gradient(circle at 25% 20%, #C9B6FF, rgba(201,182,255,0) 70%), radial-gradient(circle at 85% 90%, rgba(255,176,120,.7), rgba(255,176,120,0) 70%), #EEE8FF; }
+  .sw-sky { background: radial-gradient(circle at 25% 20%, #8FD0FF, rgba(143,208,255,0) 70%), radial-gradient(circle at 85% 90%, #BBB0FF, rgba(187,176,255,0) 70%), #E2F4FF; }
   .flabel { display: block; font: 700 11px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink2); margin: 0 0 6px; }
   .tabnum { font-variant-numeric: tabular-nums; }
   .modelload { display: flex; flex-direction: column; gap: 6px; font: 12px var(--mono); color: var(--ink2); transition: opacity .6s; }
@@ -221,8 +222,11 @@
   .card .top { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; font: 12px var(--mono); color: var(--ink2); }
   .card .top b { font-size: 16px; color: var(--ink); }
   .card .top .out { margin-left: auto; color: var(--ink); font-weight: 600; }
+  .card .top .model { display: none; } /* the header already names the model */
   .card.broken .top, .card.broken .top b, .card.broken .top .out { color: var(--bad-ink); }
   .card.broken .chip:not(.red), .card.broken .hash, .card.broken summary { color: var(--bad-ink); border-color: var(--bad-edge); }
+  /* On a broken card every chip is outlined in the alarm colour, so none melts into the card. */
+  .card.broken .chip, .card.broken .chip.red { background: transparent; border-color: currentColor; color: var(--bad-ink); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
   .chip { font: 11px/1 var(--mono); padding: 6px 10px; border-radius: 999px; border: 1px solid var(--chip-edge); color: var(--chip-ink); }
   .chip.red { background: var(--red); border-color: var(--red); color: var(--red-ink); font-weight: 700; }
@@ -238,22 +242,55 @@
   .card.broken .top::after { content: "CHAIN BREAKS HERE"; flex-basis: 100%; font: 700 10.5px var(--mono); letter-spacing: .16em; }
   .link.broken .rail::before { border-radius: 2px; }
   mark.ph { font: inherit; font-weight: 700; }
+  #lockerr:not(:empty) { padding: 10px 14px; border-radius: 12px; background: var(--bad); border: 1px solid var(--bad-edge); color: var(--bad-ink); font-size: 13px; }
   .hidden { display: none !important; }
 
-  @media (max-width: 1080px) { main { grid-template-columns: minmax(0, 1fr); } }
-  @media (max-width: 860px) { .themes { width: 100%; order: 10; flex-wrap: wrap; } }
+  /* Without backdrop blur, the glass doubles its opacity so text stays readable. */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    :root:not([data-theme]), :root[data-theme="orange-dark"] { --glass: linear-gradient(135deg, rgba(255,255,255,.60) 0%, rgba(255,255,255,.24) 42%, rgba(255,255,255,.16) 100%); }
+    :root[data-theme="orange-light"], :root[data-theme="purple-light"], :root[data-theme="sky"] { --glass: rgba(255,255,255,.86); }
+    :root[data-theme="purple-dark"] { --glass: rgba(255,255,255,.11); }
+    @media (prefers-color-scheme: light) { :root:not([data-theme]) { --glass: rgba(255,255,255,.86); } }
+  }
+
+  /* The tape panel stays in view on wide screens and scrolls inside itself, fading out at the bottom. */
+  @media (min-width: 861px) {
+    /* Fits below the header at the top of the page, and stays in view when the page scrolls. */
+    .tapepanel { position: sticky; top: 20px; max-height: max(480px, calc(100vh - 132px)); }
+    .tapepanel .tape { flex: 1 1 auto; min-height: 120px; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 28px; scrollbar-width: thin; scrollbar-color: var(--ghost-edge) transparent;
+      -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 36px), transparent); }
+  }
+
+  /* A new receipt rises in; the model loader carries a moving sheen. Both go under reduced motion. */
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .link.new { animation: rise 160ms ease-out both; }
+  @keyframes sheen { from { background-position: -120px 0; } to { background-position: calc(100% + 120px) 0; } }
+  .modelload:not(.done) progress { background-image: linear-gradient(90deg, transparent, var(--sheen), transparent); background-size: 120px 100%; background-repeat: no-repeat; animation: sheen 1.2s linear infinite; }
+  .modelload:not(.done) progress::-webkit-progress-bar { background: transparent; }
+
+  @media (max-width: 1199px) { main { grid-template-columns: minmax(0, 1fr) minmax(0, 460px); } }
+  @media (max-width: 860px) {
+    main { grid-template-columns: minmax(0, 1fr); }
+    section.glass { padding: 20px; }
+    .themes { width: 100%; order: 10; flex-wrap: wrap; }
+    .pill { margin-left: 0; width: 100%; overflow-wrap: anywhere; }
+  }
   @media (max-width: 640px) {
     .shell { padding: 12px 12px 20px; gap: 16px; }
-    section.glass { padding: 20px 18px; }
     header.glass { padding: 12px 16px; }
-    .pill { margin-left: 0; width: 100%; }
-    .notes { grid-template-columns: minmax(0, 1fr); }
     .answer { font-size: 17px; }
     .field { flex-wrap: wrap; padding: 6px; }
     .field input { padding: 0 10px; flex-basis: 100%; }
     .field .primary { flex: 1 1 0; }
     .field #speak { flex: 1 1 0; }
   }
+  @media (max-width: 560px) {
+    .notes { grid-template-columns: minmax(0, 1fr); }
+    .tapepanel .row .ghost { flex: 1 1 calc(50% - 4px); white-space: normal; }
+    .head .row.end { margin-left: 0; width: 100%; }
+    .head .row.end .ghost { flex: 1 1 auto; white-space: normal; }
+  }
+  @media (max-width: 380px) { section.glass { padding: 16px; } .card { padding: 14px; } }
 </style>
 </head>
 <body>
@@ -290,11 +327,11 @@
         <div class="head"><h2 class="lbl">Your vault</h2></div>
         <p class="big" style="margin:0">NOAI answers questions about your notes. The notes stay sealed in this browser, and the model only sees the few redacted lines the receipt tape shows you.</p>
         <label class="flabel" for="pass">Passphrase</label>
-        <p class="dim tabnum" id="lockhint" aria-live="polite">Checking this browser for a vault...</p>
         <div class="field">
           <input id="pass" type="password" placeholder="Passphrase" autocomplete="current-password">
           <button class="primary" id="unlock">Unlock</button>
         </div>
+        <p class="dim tabnum mono" id="lockhint" aria-live="polite">Checking this browser for a vault...</p>
         <p class="dim" id="lockerr" role="alert"></p>
         <p class="note">Everything on this side runs in your browser. Your vault is sealed with AES-256-GCM and kept in this browser's storage, on this device. The only thing that ever leaves is what the receipt tape shows.</p>
       </section>
@@ -341,7 +378,7 @@
       </div>
     </div>
 
-    <section class="glass">
+    <section class="glass tapepanel">
       <div><h2 class="lbl">Receipt tape</h2><p class="big">Everything that left this device</p></div>
       <div class="verdict ok" id="verdict" role="status">Nothing has left this device yet.</div>
       <div class="row">
@@ -352,7 +389,7 @@
         <button class="ghost" id="export">Download receipts</button>
       </div>
       <div class="tape" id="tape"></div>
-      <p class="note">Numbers, emails, IBANs and cards are replaced on this device before anything is sent. Names go as written. Downloaded receipts verify offline with <code>noai verify</code>, with no browser, vault or account.</p>
+      <p class="note">Numbers, emails, ID numbers, IBANs, cards and the names it recognises are replaced on this device before anything is sent. A name it does not recognise goes as written. Downloaded receipts verify offline with <code>noai verify</code>, with no browser, vault or account.</p>
     </section>
   </main>
 </div>

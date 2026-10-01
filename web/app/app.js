@@ -81,8 +81,14 @@ async function refresh() {
   await drawTape();
 }
 
+// The highest receipt already on screen, so only a receipt that just arrived rises in.
+let shownSeq = null;
+
 async function drawTape() {
   const entries = await readLedger(store);
+  const top = entries.reduce((m, e) => Math.max(m, e.seq), -1);
+  const seenBefore = shownSeq;
+  shownSeq = top;
   const receipts = await readReceipts(store);
   const v = verifyLedger(entries, receipts);
   $('verdict').className = `verdict ${v.valid ? 'ok' : 'bad'}`;
@@ -96,7 +102,8 @@ async function drawTape() {
     const broken = !v.valid && v.brokenAt === e.seq;
     const n = (r.sources ?? []).length;
     const outcome = r.outcome ? `<span class="chip">${r.outcome === 'timeout' ? 'no answer in time' : 'no answer'}</span>` : '';
-    cards.push(`<div class="link${broken ? ' broken' : ''}"><div class="rail"></div><div class="card${broken ? ' broken' : ''}">
+    const fresh = seenBefore !== null && e.seq > seenBefore;
+    cards.push(`<div class="link${broken ? ' broken' : ''}${fresh ? ' new' : ''}"><div class="rail"></div><div class="card${broken ? ' broken' : ''}">
       <div class="top"><b>#${e.seq}</b><span>${esc(new Date(e.at).toLocaleTimeString())}</span><span class="model">${esc(e.model.split('/').pop())}</span><span class="out">${e.payloadBytes} bytes out</span></div>
       <div class="chips"><span class="chip">${n} passage${n === 1 ? '' : 's'}</span>${reds || '<span class="chip">no redactions needed</span>'}${outcome}${r.usage ? `<span class="chip">${r.usage.promptTokens} in / ${r.usage.completionTokens} out tokens</span>` : ''}</div>
       ${disclosed ? `<details><summary>Exactly what the model saw</summary><pre>${withPlaceholders(disclosed)}</pre><p class="hash">payload sha256 ${esc(e.payloadHash)}<br>entry ${esc(e.entryHash)}<br>prev ${esc(e.prev)}</p></details>` : ''}
@@ -104,6 +111,12 @@ async function drawTape() {
     </div></div>`);
   }
   $('tape').innerHTML = cards.join('');
+}
+
+/** After a tamper, bring the receipt where the chain breaks into view; it is often the oldest, at the bottom. */
+async function drawTapeShowingBreak() {
+  await drawTape();
+  document.querySelector('#tape .link.broken')?.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
 }
 
 $('unlock').onclick = async () => {
@@ -289,7 +302,7 @@ $('tamper').onclick = async () => {
   // Rewrite history: claim the first disclosure was smaller than it was.
   entries[0].payloadBytes = Math.max(1, Math.floor(entries[0].payloadBytes / 4));
   await store.put('ledger', entries);
-  await drawTape();
+  await drawTapeShowingBreak();
 };
 $('delreceipt').onclick = async () => {
   const receipts = await readReceipts(store);
@@ -297,7 +310,7 @@ $('delreceipt').onclick = async () => {
   await backup();
   // Hide one disclosure: delete the most recent receipt and keep the chain.
   await store.put('receipts', receipts.slice(0, -1));
-  await drawTape();
+  await drawTapeShowingBreak();
 };
 $('restore').onclick = async () => {
   const ledger = await store.get('ledger.before-tamper');
