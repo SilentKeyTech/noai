@@ -321,6 +321,19 @@
     .chars button { width: calc(33.33% - 7px); }
   }
 
+  /* Check-ins: big, friendly one-tap routines, and today's list with times */
+  .routines { display: flex; flex-wrap: wrap; gap: 10px; }
+  .routines:empty { display: none; }
+  .routines button { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 18px 8px 10px; border-radius: 999px; border: 1px solid var(--ghost-edge); background: var(--ghost); color: var(--ink); font: 600 14px var(--font); cursor: pointer; text-align: left; }
+  .routines button .tick { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 999px; background: var(--face); color: var(--face-ink); font: 800 16px var(--font); flex-shrink: 0; }
+  .routines button .who { font-weight: 800; }
+  .routines button:hover .tick { transform: scale(1.08); }
+  .cilist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .cilist li { display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 0 6px 0 14px; border-radius: 12px; background: var(--sub); border: 1px solid var(--sub-edge); font-size: 14px; min-width: 0; }
+  .cilist li .t { font: 700 12px var(--mono); padding: 4px 9px; border-radius: 99px; background: var(--ok); border: 1px solid var(--ok-edge); color: var(--ok-ink); flex-shrink: 0; }
+  .cilist li .w { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cilist li.none { color: var(--ink2); border-style: dashed; background: transparent; }
+  @media (max-width: 560px) { .routines button { width: 100%; } .head .aside { margin-left: 0; } }
   .hidden { display: none !important; }
 
   /* Without backdrop blur, the glass doubles its opacity so text stays readable. */
@@ -442,6 +455,20 @@
           <div class="skills" id="skills" role="group" aria-label="Skills"></div>
           <div class="answer" id="answer" aria-live="polite"><span class="dim">Ranking and redaction happen in this tab. Only the smallest set of relevant, redacted passages goes to NVIDIA Nemotron 3 Super on Nebius Token Factory, and every call gets a signed receipt.</span></div>
           <p class="stats" id="stats" aria-live="polite"></p>
+        </section>
+
+        <section class="glass" id="checkins" aria-label="Check-ins">
+          <div class="head"><h2 class="lbl">Check-ins</h2><span class="aside">Kept and answered on this device. Nothing is sent.</span></div>
+          <p class="dim">Say it in the box above, like "Maya took her inhaler", or tap a routine. Ask "Did Maya take her meds today?" and the answer comes from here.</p>
+          <div class="routines" id="routines" role="group" aria-label="Check in again with one tap"></div>
+          <ul class="cilist" id="cilist"></ul>
+          <details><summary>+ New check-in</summary>
+            <div class="stack">
+              <label class="flabel" for="ciwho">Who</label><input class="plain" id="ciwho" placeholder="Maya" maxlength="30" autocomplete="off">
+              <label class="flabel" for="ciwhat">What they did</label><input class="plain" id="ciwhat" placeholder="took her inhaler" maxlength="80" autocomplete="off">
+              <div class="row"><button class="ghost" id="ciadd" type="button">Check in now</button></div>
+            </div>
+          </details>
         </section>
 
         <section class="glass">

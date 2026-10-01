@@ -29,6 +29,8 @@ const C = {
       oops: () => 'I could not get an answer this time. Nothing else changed.',
       alarm: () => 'Someone changed the receipt log. The tape shows where it breaks.',
       restored: () => 'The log is back as it was, and it checks out.',
+      checkin: (k) => `Checked in: ${k.who === 'me' ? 'you' : k.who} ${k.what}. Sealed with the time, and nothing was sent.`,
+      local: (k) => (k.yes ? 'I found it in your sealed check-ins, on this device. Nothing was sent.' : 'It is not in the check-ins yet. I looked on this device only, and sent nothing.'),
     },
   },
   pip: {
@@ -51,6 +53,8 @@ const C = {
       oops: () => 'Oh no, I could not get an answer this time.',
       alarm: () => 'Uh-oh! Someone messed with the receipts. Look at the red one!',
       restored: () => 'Phew, all fixed!',
+      checkin: (k) => `Well done${k.who === 'me' ? '' : `, ${k.who}`}! I wrote it down with the time.`,
+      local: (k) => (k.yes ? 'I looked in my notebook. Yes! And I did not tell anyone.' : 'I looked in my notebook, and I cannot see it yet.'),
     },
   },
   bolt: {
@@ -73,6 +77,8 @@ const C = {
       oops: () => 'No answer received. Nothing else changed.',
       alarm: () => 'Alert: the receipt log was altered. Check the red card.',
       restored: () => 'Log restored. Chain verified.',
+      checkin: (k) => `Logged: ${k.who === 'me' ? 'you' : k.who} ${k.what}. Timestamped. 0 bytes sent.`,
+      local: (k) => (k.yes ? 'Check-in found on device. 0 bytes sent.' : 'No matching check-in on device. 0 bytes sent.'),
     },
   },
   nimbus: {
@@ -95,6 +101,8 @@ const C = {
       oops: () => 'A little storm. I could not get an answer.',
       alarm: () => 'Thunder! The receipts were changed. See the red one.',
       restored: () => 'Clear skies again.',
+      checkin: (k) => `Lovely${k.who === 'me' ? '' : `, ${k.who}`}. Tucked away with the time.`,
+      local: (k) => (k.yes ? 'I found it in the check-ins, right here on this device.' : 'I cannot find that one yet. I only looked here, on this device.'),
     },
   },
   kit: {
@@ -117,6 +125,8 @@ const C = {
       oops: () => 'Hiss, no answer this time.',
       alarm: () => 'Fur up! Someone touched the receipts. See the red one.',
       restored: () => 'All tidy again. Purr.',
+      checkin: (k) => `Purr-fect${k.who === 'me' ? '' : `, ${k.who}`}! Noted, with the time.`,
+      local: (k) => (k.yes ? 'Found it, right here. Nothing left this device.' : 'Sniffed around. Not there yet.'),
     },
   },
 };

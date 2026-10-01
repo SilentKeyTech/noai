@@ -1,5 +1,6 @@
 /** The browser demo's UI. All the work is in lib/; this file only draws it. */
-import { respond } from './lib/agent.js';
+import { checkIn, respond } from './lib/agent.js';
+import { CHECKIN_KIND, routines, whenSaid } from './lib/core/checkins.js';
 import { SKILLS } from './lib/core/skills.js';
 import { loadEmbedder } from './lib/embedder.js';
 import { GateRefused } from './lib/gate.js';
@@ -76,7 +77,8 @@ async function refresh() {
   if (vault) {
     const notes = await readNotes(vault);
     const reminders = notes.filter((n) => n.kind === 'reminder').sort((a, b) => (a.title < b.title ? -1 : 1));
-    const rest = notes.filter((n) => n.kind !== 'reminder');
+    const rest = notes.filter((n) => n.kind !== 'reminder' && n.kind !== CHECKIN_KIND);
+    drawCheckins(notes);
     const item = (n) => {
       if (n.kind === 'reminder') return `<li class="rem"><span class="when">${esc(n.title)}</span><span>${esc(n.body)}</span><span class="seal">sealed</span><button class="forget" data-id="${esc(n.id)}" aria-label="Forget this reminder">forget</button></li>`;
       const label = n.kind === 'memory' ? n.body : n.title;
@@ -90,6 +92,17 @@ async function refresh() {
 
 // The highest receipt already on screen, so only a receipt that just arrived rises in.
 let shownSeq = null;
+
+/** Today's check-ins, newest first, and the routines as one-tap buttons. */
+function drawCheckins(notes) {
+  const now = new Date();
+  const all = notes.filter((n) => n.kind === CHECKIN_KIND).sort((a, b) => (a.addedAt < b.addedAt ? 1 : -1));
+  const today = all.filter((n) => new Date(n.addedAt).toDateString() === now.toDateString());
+  $('routines').innerHTML = routines(all).map((r, i) => `<button type="button" data-i="${i}" aria-label="Check in: ${esc(r.who)} ${esc(r.what)}"><span class="tick" aria-hidden="true">\u2713</span><span><span class="who">${esc(r.who === 'me' ? 'Me' : r.who)}</span> ${esc(r.what)}</span></button>`).join('');
+  $('routines').dataset.list = JSON.stringify(routines(all));
+  $('cilist').innerHTML = today.map((n) => `<li><span class="t">${esc(whenSaid(new Date(n.addedAt), now).replace('today at ', ''))}</span><span class="w"><b>${esc(n.title === 'me' ? 'Me' : n.title)}</b> ${esc(n.body)}</span><button class="forget" data-id="${esc(n.id)}" aria-label="Forget this check-in">forget</button></li>`).join('')
+    || '<li class="none">No check-ins yet today.</li>';
+}
 
 async function drawTape() {
   const entries = await readLedger(store);
@@ -159,7 +172,16 @@ $('ask').onclick = async () => {
   try {
     await embedderReady;
     const r = await respond(vault, cfg, q, { embedder });
-    if (r.kind === 'memory') {
+    if (r.kind === 'checkin') {
+      $('answer').innerHTML = `<div class="kept">Checked in: ${esc(r.note.title === 'me' ? 'you' : r.note.title)} ${esc(r.note.body)}, ${esc(whenSaid(new Date(r.note.addedAt), new Date()))}.</div>`;
+      $('stats').innerHTML = '<b>0 bytes sent.</b> A check-in is sealed on this device with its time, and never calls the model.';
+      $('q').value = '';
+      pal.set('kept', 'checkin', { who: r.note.title, what: r.note.body });
+    } else if (r.kind === 'checkin-answer') {
+      $('answer').textContent = r.answer;
+      $('stats').innerHTML = '<b>0 bytes sent.</b> Answered on this device from your sealed check-ins. No model call and no receipt.';
+      pal.set('happy', 'local', { yes: !!r.found });
+    } else if (r.kind === 'memory') {
       $('answer').innerHTML = `<div class="kept">Kept in your vault: ${esc(r.note.body)}</div>`;
       $('stats').innerHTML = '<b>0 bytes sent.</b> Saving a memory never calls the model and writes no receipt, because nothing left.';
       $('q').value = '';
@@ -173,7 +195,7 @@ $('ask').onclick = async () => {
     }
     if (spoken) {
       $('stats').innerHTML += ` · <span class="voice">${esc(spoken)}</span>`;
-      const said = r.kind === 'memory' ? `Kept in your vault: ${r.note.body}` : r.answer;
+      const said = r.kind === 'memory' ? `Kept in your vault: ${r.note.body}` : r.kind === 'checkin' ? `Checked in: ${r.note.title} ${r.note.body}` : r.answer;
       if (!sayAloud(said.replace(/\*\*/g, '').replace(/\[P\d+\]/g, ''))) $('stats').innerHTML += ' · <span class="voice">no on-device voice in this browser, so the answer is not read aloud</span>';
     }
   } catch (e) {
@@ -296,6 +318,32 @@ $('imp').onchange = async () => {
     }
   }
   $('impstat').innerHTML = `${lines.join('<br>')}<br>Nothing was sent.`;
+  await refresh();
+};
+async function tapCheckin(who, what) {
+  if (!vault || !who.trim() || !what.trim()) return;
+  const r = await checkIn(vault, who, what);
+  $('answer').className = 'answer';
+  $('answer').innerHTML = `<div class="kept">Checked in: ${esc(r.note.title === 'me' ? 'you' : r.note.title)} ${esc(r.note.body)}, ${esc(whenSaid(new Date(r.note.addedAt), new Date()))}.</div>`;
+  $('stats').innerHTML = '<b>0 bytes sent.</b> A check-in is sealed on this device with its time, and never calls the model.';
+  pal.set('kept', 'checkin', { who: r.note.title, what: r.note.body });
+  await refresh();
+}
+$('routines').onclick = (e) => {
+  const b = e.target.closest('button[data-i]');
+  if (!b) return;
+  const r = JSON.parse($('routines').dataset.list || '[]')[Number(b.dataset.i)];
+  if (r) tapCheckin(r.who, r.what);
+};
+$('ciadd').onclick = async () => {
+  await tapCheckin($('ciwho').value, $('ciwhat').value);
+  $('ciwhat').value = '';
+};
+$('ciwhat').onkeydown = (e) => { if (e.key === 'Enter') $('ciadd').click(); };
+$('cilist').onclick = async (e) => {
+  const b = e.target.closest('.forget');
+  if (!b || !confirm('Delete this check-in from the vault? This cannot be undone.')) return;
+  await forgetNote(vault, b.dataset.id);
   await refresh();
 };
 $('notes').onclick = async (e) => {
