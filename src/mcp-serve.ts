@@ -132,8 +132,9 @@ async function main(): Promise<void> {
   const allowedOrigins = (process.env.NOAI_MCP_ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   const host = process.env.NOAI_MCP_HOST ?? '127.0.0.1';
   const port = Number(process.env.NOAI_MCP_PORT ?? 7792);
-  createMcpServer({ ctx: { vault, cfg: configFromEnv(root), reveal }, token, allowedOrigins }).listen(port, host, () => {
-    console.log(`NOAI MCP on http://${host}:${String(port)}/mcp  (data in ${root})`);
+  const toolset = (['notes', 'vault', 'all'] as const).find((t) => t === process.env.NOAI_MCP_TOOLS) ?? 'notes';
+  createMcpServer({ ctx: { vault, cfg: configFromEnv(root), reveal, toolset }, token, allowedOrigins }).listen(port, host, () => {
+    console.log(`NOAI MCP on http://${host}:${String(port)}/mcp  (data in ${root}, tools: ${toolset})`);
     console.log(reveal.length ? `Revealed to MCP clients: ${reveal.join(', ')}` : 'Every private value stays a placeholder for MCP clients.');
   });
 }

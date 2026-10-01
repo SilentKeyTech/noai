@@ -13,6 +13,7 @@
     "serve": "node --env-file-if-exists=.env src/server.ts",
     "web": "node --env-file-if-exists=.env relay/serve.mjs",
     "mcp": "node --env-file-if-exists=.env src/mcp-serve.ts",
+    "vault": "node --env-file-if-exists=.env src/vault-cli.ts",
     "model": "node scripts/fetch-model.ts",
     "build:web": "node scripts/build-web.ts",
     "pretest": "node scripts/build-web.ts",

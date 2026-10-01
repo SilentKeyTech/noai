@@ -101,6 +101,29 @@ npx @modelcontextprotocol/inspector --cli http://127.0.0.1:7792/mcp --transport 
 
 The server listens on 127.0.0.1 by default and every request needs the bearer token. An `Origin` header is refused unless listed in `NOAI_MCP_ALLOWED_ORIGINS`. To reach it from a hosted assistant, put it behind an HTTPS tunnel you control (`NOAI_MCP_HOST`, `NOAI_MCP_PORT`); the vault, the keys and the ledger stay on your machine.
 
+## Agent vault: keys your AI agents use without seeing them
+
+Coding agents such as Claude Code need API keys to do real work. Pasting a key into the chat puts it in the agent's context, its logs and its model provider's servers. NOAI's agent vault keeps the key on your machine instead:
+
+- **The agent only holds a placeholder.** It writes `Authorization: Bearer {{secret:github_token}}`. `src/gate.ts`, still the only file that can reach the network, swaps in the real value as the request leaves. It does this only over HTTPS, only to the exact hosts you allowed for that secret, and only in the part of the request you allowed (header by default). Anything else is refused and nothing is sent.
+- **Secrets are blanked out of what comes back.** If a response or an error message contains any vault secret (as it is, base64, URL-encoded or hex), the agent sees the placeholder instead. The same applies to the notes tools and to anything sent to the model.
+- **Every use is receipted.** Each request that names a secret, sent or refused, gets an Ed25519-signed receipt on the same hash chain as the disclosures. It records which secret, which host and path, when, which MCP client asked and how it ended. The receipt never holds the value, or a hash of anything that contains it. `npm run vault -- verify` checks the chain offline and tells you which key signed it.
+- **Local, no account.** Secrets are sealed in the same AES-256-GCM vault as the notes. Text values and small files such as an Android `.jks` are both supported.
+
+```bash
+npm run vault -- init
+npm run vault -- add github_token --host api.github.com      # value typed hidden, never on the command line
+npm run vault -- serve                                        # prints the one-line `claude mcp add` command
+npm run vault -- receipts
+npm run vault -- verify --expect <device key>
+```
+
+Five-minute setup for Claude Code on Windows: [docs/agent-vault.md](docs/agent-vault.md).
+
+**First use: Silent Key's own release keys.** Silent Key Technologies signs its Android apps with a Play upload keystore and uses API tokens for GitHub and the Play Developer API. The plan is for those to live in the agent vault, so the agents that help with releases call the APIs by placeholder and never read the keys. The tests rehearse that setup with test values only: a stand-in `.jks`, a GitHub token and a Play access token. No real Silent Key key has been imported.
+
+Limits: the vault keeps keys out of the agent's context, but it is not a security boundary between programs running as the same Windows user. An allowed host that stores what it is sent could be used to leak a secret placed in the body, which is why body placement is off by default. Receipts prove what your device sent or refused, not what the API did with it. The vault has not had an independent security review. The full list is in [docs/agent-vault.md](docs/agent-vault.md#limits-stated-plainly).
+
 ## What is proven, and what is not
 
 Proven by the code and the tests:
@@ -116,6 +139,8 @@ Proven by the code and the tests:
 - Saving a memory sends nothing and writes no receipt (test: `saving a memory sends nothing, writes no ledger entry, and seals it`).
 - An MCP client receives the answer only, with private values still placeholders, and the handover is signed into the same chain as the model call (tests: `test/mcp.test.ts`).
 - When the model asks to remember something, it only ever saw placeholders. The real values are put back and sealed on device (test: `keeps what the model asks to remember, with the real values put back on device`).
+
+- The agent vault: the API receives the real value, while the agent, the receipts, the ledger and the vault file never hold it in any common encoding. Requests to a host that was not allowed, over plain http, in a part of the request that was not allowed, or naming the host by placeholder are refused and send nothing, yet are still receipted. Echoes are blanked, editing or deleting a receipt breaks the chain, and a chain re-signed under another key names that key (tests: `test/vault.test.ts`).
 
 The privacy claims each have their own test, including three that prove what NOAI does **not** hide: `node --test test/claims.test.ts`.
 

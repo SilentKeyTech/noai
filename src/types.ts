@@ -57,6 +57,17 @@ export interface Vault {
    * The receipt carries only its hash; this lets the owner read it back.
    */
   disclosures: Record<string, Sealed>;
+  /** Agent vault secrets. Name, policy and value are all inside the seal. Absent in vaults made before it. */
+  secrets?: Record<string, SealedSecret>;
+  /** Bearer token for the local MCP server, sealed so it is only readable once the vault is open. */
+  mcpToken?: Sealed;
+}
+
+/** One secret an agent may use by placeholder. Nothing readable sits in the file. */
+export interface SealedSecret {
+  id: string;
+  sealed: Sealed;
+  addedAt: string;
 }
 
 /** One passage of a note, the unit the retriever ranks and the gate discloses. */
@@ -95,6 +106,54 @@ export interface SignedDisclosure {
   receipt: DisclosureReceipt;
   signature: string;
 }
+
+/** Where in a request a secret may be inserted. */
+export type Placement = 'header' | 'url' | 'body';
+
+/**
+ * What the gate attests to every time an agent's request names a vault secret,
+ * whether it was sent or refused. It never carries the secret value, nor a hash
+ * of anything that contains it: a hash of the injected bytes would let anyone
+ * holding the receipt test guesses at a weak secret offline.
+ */
+export interface SecretUseReceipt {
+  version: 1;
+  kind: 'noai.secret-use';
+  statement: string;
+  receiptId: string;
+  at: string;
+  /** the MCP client that asked, as it named itself */
+  client: string;
+  /** which secrets the request named, by vault id and name, and where it put them. id is null for a name the vault does not hold. */
+  secrets: { id: string | null; name: string; placements: Placement[] }[];
+  method: string;
+  /** destination host, with port if not the default */
+  host: string;
+  /** the URL path as the agent wrote it, placeholders intact, no query */
+  path: string;
+  /** sha256 of the request exactly as the agent wrote it, before any secret was inserted */
+  requestHash: string;
+  requestBytes: number;
+  /** sent: the bytes left. refused: nothing left. error: the bytes left and no answer came back. */
+  outcome: 'sent' | 'refused' | 'error';
+  status: number | null;
+  /** why it was refused or failed, in words that contain no secret */
+  reason?: string;
+  /** sha256 of exactly what was handed back to the agent, after redaction */
+  responseHash: string;
+  responseBytes: number;
+  /** how many copies of a secret were found in the response and blanked */
+  echoesRedacted: number;
+  signer: string;
+}
+
+export interface SignedSecretUse {
+  receipt: SecretUseReceipt;
+  signature: string;
+}
+
+/** Anything the ledger chains: a disclosure to a model or client, or a secret use. */
+export type SignedReceipt = SignedDisclosure | SignedSecretUse;
 
 /** One link in the append-only disclosure log. */
 export interface LedgerEntry {
