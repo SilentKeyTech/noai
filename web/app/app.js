@@ -7,7 +7,8 @@ import { exportFiles, readLedger, readReceipts, verifyLedger } from './lib/ledge
 import { idbStore } from './lib/store.js';
 import { listen, receiptVoice } from './lib/voice.js';
 import { ingestText, newOnly, parsePdfText } from './lib/core/ingest.js';
-import { addNote, closeVault, createVault, forgetNote, openVault, readDisclosure, readNotes, signerFingerprint, vaultExists } from './lib/vault.js';
+import { addNote, closeVault, createVault, forgetNote, openVault, readDisclosure, readNotes, readProfile, saveProfile, signerFingerprint, vaultExists } from './lib/vault.js';
+import { mountCompanion } from './companion.js';
 
 const MODEL = 'nvidia/nemotron-3-super-120b-a12b';
 const FAST_MODEL = 'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B';
@@ -18,6 +19,10 @@ let vault = null;
 let embedder = null;
 
 const $ = (id) => document.getElementById(id);
+// The face that shows what NOAI is doing. It only reports what the code below did.
+const pal = mountCompanion({ face: $('face'), line: $('cline'), picker: $('chars'), label: $('cname') });
+pal.set('sleep');
+let profile = {};
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 /** Escape first, then mark every placeholder the model saw in place of a real value. */
 const withPlaceholders = (s) => esc(s).replace(/\[[A-Z]+_\d+\]/g, '<mark class="ph">$&</mark>');
@@ -65,6 +70,8 @@ async function refresh() {
     : 'No vault in this browser yet. The passphrase you choose now creates one. Forget it and the vault is gone: there is no reset.';
   $('unlock').textContent = exists ? 'Unlock' : 'Create vault';
   $('lock').classList.toggle('hidden', !!vault);
+  $('callme').disabled = $('callmesave').disabled = !vault;
+  $('callmehint').textContent = vault ? 'Sealed in your vault and never sent.' : 'Sealed in your vault and never sent. Unlock first.';
   $('app').classList.toggle('hidden', !vault);
   if (vault) {
     const notes = await readNotes(vault);
@@ -116,6 +123,7 @@ async function drawTape() {
 /** After a tamper, bring the receipt where the chain breaks into view; it is often the oldest, at the bottom. */
 async function drawTapeShowingBreak() {
   await drawTape();
+  if ($('verdict').classList.contains('bad')) pal.set('alarm');
   document.querySelector('#tape .link.broken')?.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
 }
 
@@ -128,6 +136,10 @@ $('unlock').onclick = async () => {
   try {
     vault = (await vaultExists(store)) ? await openVault(store, pass, progress) : await createVault(store, pass, progress);
     $('pass').value = '';
+    profile = await readProfile(vault);
+    pal.setName(profile.name);
+    $('callme').value = profile.name ?? '';
+    pal.set('happy', 'hello');
   } catch (e) {
     $('lockerr').textContent = e.message;
   }
@@ -140,6 +152,7 @@ $('ask').onclick = async () => {
   const q = $('q').value.trim();
   if (!q) return;
   $('ask').disabled = true;
+  pal.set('think');
   $('answer').className = 'answer';
   $('answer').textContent = 'Ranking in this tab, redacting, sending through the gate...';
   $('stats').textContent = '';
@@ -150,7 +163,9 @@ $('ask').onclick = async () => {
       $('answer').innerHTML = `<div class="kept">Kept in your vault: ${esc(r.note.body)}</div>`;
       $('stats').innerHTML = '<b>0 bytes sent.</b> Saving a memory never calls the model and writes no receipt, because nothing left.';
       $('q').value = '';
+      pal.set('kept');
     } else {
+      pal.set('happy', 'happy', { sent: r.used, hid: Object.values(r.signed?.receipt?.redactions ?? {}).reduce((a, b) => a + b, 0) });
       const kept = [...r.remembered.map((m) => `Kept in your vault: ${esc(m.body)}`), ...r.reminders.map((m) => `Reminder set for ${esc(m.title)}: ${esc(m.body)}`)];
       $('answer').innerHTML = esc(r.answer).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') + kept.map((k) => `<div class="kept">${k}</div>`).join('');
       const who = r.fellBack ? ' · <span class="fell">answered by Nemotron Nano, because Nemotron Super did not answer in time</span>' : '';
@@ -162,6 +177,7 @@ $('ask').onclick = async () => {
       if (!sayAloud(said.replace(/\*\*/g, '').replace(/\[P\d+\]/g, ''))) $('stats').innerHTML += ' · <span class="voice">no on-device voice in this browser, so the answer is not read aloud</span>';
     }
   } catch (e) {
+    pal.set('oops');
     $('answer').className = 'answer err';
     $('answer').textContent = e instanceof GateRefused ? e.message : `Not answered: ${e.message}`;
   }
@@ -170,6 +186,15 @@ $('ask').onclick = async () => {
   await refresh();
 };
 $('q').onkeydown = (e) => { if (e.key === 'Enter') $('ask').click(); };
+$('q').oninput = () => { if (vault && pal.state !== 'think') pal.set($('q').value ? 'listen' : 'idle', $('q').value ? 'listen' : null); };
+$('callmesave').onclick = async () => {
+  if (!vault) return;
+  profile = { ...profile, name: $('callme').value.trim().slice(0, 40) };
+  await saveProfile(vault, profile);
+  pal.setName(profile.name);
+  pal.set('happy', 'hello');
+};
+$('callme').onkeydown = (e) => { if (e.key === 'Enter') $('callmesave').click(); };
 
 // Voice: speak a question, hear the answer. The audio goes to AssemblyAI and is receipted;
 // the answer is read aloud only by a voice that runs on this device, so it adds no second egress.
@@ -197,6 +222,7 @@ $('speak').onclick = async () => {
     $('stats').textContent = '';
     try {
       session = await listen({ onPartial: (t) => ($('q').value = t) });
+      pal.set('listen');
       $('speak').textContent = 'Stop';
       $('speak').classList.add('live');
       $('speak').setAttribute('aria-pressed', 'true');
@@ -278,11 +304,13 @@ $('notes').onclick = async (e) => {
   await forgetNote(vault, b.dataset.id);
   await refresh();
 };
-$('lockbtn').onclick = async () => { closeVault(vault); vault = null; await refresh(); };
+$('lockbtn').onclick = async () => { closeVault(vault); vault = null; pal.setName(''); pal.set('sleep'); await refresh(); };
 $('wipe').onclick = async () => {
   if (!confirm('Delete the vault, receipts and chain from this browser? There is no other copy.')) return;
   closeVault(vault);
   vault = null;
+  pal.setName('');
+  pal.set('sleep');
   for (const k of ['vault', 'ledger', 'receipts', 'ledger.before-tamper', 'receipts.before-tamper']) await store.del(k);
   await refresh();
 };
@@ -321,6 +349,7 @@ $('restore').onclick = async () => {
   await store.del('ledger.before-tamper');
   await store.del('receipts.before-tamper');
   await drawTape();
+  if (vault) pal.set('happy', 'restored');
 };
 $('export').onclick = async () => {
   for (const [name, text] of Object.entries(await exportFiles(store))) {

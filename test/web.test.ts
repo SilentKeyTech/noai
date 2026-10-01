@@ -20,7 +20,7 @@ import { exportFiles, readLedger, verifyLedger } from '../web/app/lib/ledger.js'
 // @ts-expect-error plain JS module
 import { memoryStore } from '../web/app/lib/store.js';
 // @ts-expect-error plain JS module
-import { addNote, createVault, openVault, readNotes } from '../web/app/lib/vault.js';
+import { addNote, createVault, openVault, readNotes, readProfile, saveProfile } from '../web/app/lib/vault.js';
 // @ts-expect-error plain JS module
 import { randomBytes, seal, utf8 } from '../web/app/lib/wcrypto.js';
 
@@ -46,6 +46,19 @@ describe('browser vault', () => {
     assert.ok(!raw.includes('Penicillin') && !raw.includes('Secret title'));
     await assert.rejects(openVault(store, 'wrong passphrase'), /does not open/);
     assert.equal((await readNotes(await openVault(store, PASS)))[0].body, 'Penicillin allergy');
+  });
+
+  it('seals what the companion calls the owner, and never retrieves or sends it', async () => {
+    const store = memoryStore();
+    const v = await createVault(store, PASS);
+    await saveProfile(v, { name: 'Layla' });
+    assert.ok(!JSON.stringify(await store.get('vault')).includes('Layla'));
+    assert.deepEqual(await readProfile(await openVault(store, PASS)), { name: 'Layla' });
+    assert.equal((await readNotes(v)).length, 0);
+    const { transport, sent } = fakeRelay('Nothing about that. [P1]');
+    await addNote(v, 'Health', 'Penicillin allergy.');
+    await respond(v, cfg, 'Do I have any allergies?', { transport });
+    assert.ok(!sent.join('').includes('Layla'), 'the owner name left the browser');
   });
 
   it('seals in the same format the desktop opens', async () => {

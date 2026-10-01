@@ -246,6 +246,81 @@
   .link.broken .rail::before { border-radius: 2px; }
   mark.ph { font: inherit; font-weight: 700; }
   #lockerr:not(:empty) { padding: 10px 14px; border-radius: 12px; background: var(--bad); border: 1px solid var(--bad-edge); color: var(--bad-ink); font-size: 13px; }
+  /* The companion. The theme is its skin: each colourway paints the face in its own two colours. */
+  :root:not([data-theme]), :root[data-theme="orange-dark"] { --face: #0A0A0A; --face-ink: #FF9A4D; --face-glow: rgba(110,24,0,.35); }
+  @media (prefers-color-scheme: light) { :root:not([data-theme]) { --face: #2E2E34; --face-ink: #FFB27A; --face-glow: rgba(160,60,0,.22); } }
+  :root[data-theme="orange-light"] { --face: #2E2E34; --face-ink: #FFB27A; --face-glow: rgba(160,60,0,.22); }
+  :root[data-theme="purple-light"] { --face: #6D3FD1; --face-ink: #FFFFFF; --face-glow: rgba(76,29,149,.28); }
+  :root[data-theme="purple-dark"] { --face: #7C4DDB; --face-ink: #FFFFFF; --face-glow: rgba(8,0,24,.5); }
+  :root[data-theme="sky"] { --face: #6A4BC4; --face-ink: #FFFFFF; --face-glow: rgba(20,90,160,.24); }
+
+  .companion { flex-direction: row !important; align-items: center; gap: 24px !important; }
+  .cbody { display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1 1 auto; }
+  .cline { margin: 0; font-size: 18px; line-height: 1.45; font-weight: 600; min-height: 2.9em; }
+  .face { position: relative; flex: 0 0 auto; width: 120px; height: 120px; transition: transform .35s cubic-bezier(.3,1.4,.5,1); }
+  .face svg { display: block; width: 100%; height: 100%; overflow: visible; transform-origin: 50% 85%; filter: drop-shadow(0 12px 18px var(--face-glow)); animation: breathe 4.8s ease-in-out infinite; }
+  .face::after { content: ""; position: absolute; left: 22%; right: 22%; bottom: -10px; height: 10px; border-radius: 50%; background: var(--face-glow); filter: blur(4px); opacity: .8; }
+  .face .b { fill: var(--face); }
+  .face .i { fill: var(--face-ink); }
+  .face .s { fill: none; stroke: var(--face-ink); stroke-linecap: round; stroke-linejoin: round; }
+  .face .soft { opacity: .35; }
+  .face .faint { opacity: .16; }
+  .face .feat { display: none; transform-box: fill-box; transform-origin: center; }
+  .face .shade * { fill: url(#noai-face-light); stroke: none; }
+  .face .shade .s, .face .shade .i { display: none; }
+  .face .zz text { fill: var(--ink); font: 800 17px var(--font); }
+  .face .zz .z2 { font-size: 22px; }
+
+  /* Which eyes and mouth each state shows */
+  .face:is([data-state="idle"], [data-state="listen"], [data-state="think"], [data-state="alarm"], [data-state="oops"]) .e-open,
+  .face:is([data-state="happy"], [data-state="kept"]) .e-happy,
+  .face[data-state="sleep"] .e-closed, .face[data-state="sleep"] .zz,
+  .face:is([data-state="idle"], [data-state="listen"], [data-state="think"], [data-state="sleep"]) .m-calm,
+  .face:is([data-state="happy"], [data-state="kept"]) .m-smile,
+  .face:is([data-state="alarm"], [data-state="oops"]) .m-o { display: inline; }
+
+  /* How each state moves */
+  .face[data-state="idle"] .e-open { animation: blink 5.6s infinite; }
+  .face[data-state="listen"] { transform: rotate(-7deg); }
+  .face[data-state="listen"] .e-open { animation: blink 3.2s infinite; }
+  .face[data-state="think"] .e-open { animation: look 1.6s ease-in-out infinite; }
+  .face[data-state="think"] .ant { animation: glow 0.8s ease-in-out infinite alternate; }
+  .face:is([data-state="happy"], [data-state="kept"]) { animation: hop .7s ease-out 1; }
+  .face[data-state="alarm"] { --face-ink: var(--bad-ink); transform: scale(1.06); }
+  .face[data-state="alarm"] .e-open { transform: scale(1.18); }
+  .face[data-state="oops"] { transform: rotate(5deg) translateY(2px); }
+  .face[data-state="sleep"] svg { animation-duration: 6.5s; }
+  .face[data-state="sleep"] .zz text { animation: zz 2.6s ease-in-out infinite; }
+  .face[data-state="sleep"] .zz text + text { animation-delay: 1.3s; }
+
+  @keyframes breathe { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-2px) scale(1.018); } }
+  @keyframes blink { 0%, 93%, 100% { transform: scaleY(1); } 95.5% { transform: scaleY(.08); } }
+  @keyframes look { 0%, 100% { transform: translate(-3px, -3px); } 50% { transform: translate(3px, -3px); } }
+  @keyframes glow { from { opacity: .45; } to { opacity: 1; } }
+  @keyframes hop { 0% { translate: 0 0; } 30% { translate: 0 -10px; } 55% { translate: 0 0; } 75% { translate: 0 -3px; } 100% { translate: 0 0; } }
+  @keyframes zz { 0% { opacity: 0; transform: translate(0, 4px); } 40% { opacity: 1; } 100% { opacity: 0; transform: translate(5px, -9px); } }
+
+  /* The character picker */
+  .cpick summary { width: fit-content; }
+  .chars { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+  .chars button { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 76px; padding: 10px 4px 8px; border-radius: 14px; border: 1px solid var(--ghost-edge); background: var(--ghost); color: var(--ink); cursor: pointer; font: 600 12px var(--font); }
+  .chars button[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+  .chars .mini { width: 46px; height: 46px; transition: none; }
+  .chars .mini svg { animation: none; filter: none; }
+  .chars .mini::after { display: none; }
+  .chars .mini .feat { animation: none !important; }
+  .chars button:hover .mini { transform: translateY(-2px); }
+  .callme { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+  .callme .row { flex-wrap: nowrap; }
+  .callme input { flex: 1 1 auto; min-width: 0; }
+
+  @media (max-width: 560px) {
+    .companion { gap: 16px !important; align-items: flex-start; }
+    .face { width: 84px; height: 84px; }
+    .cline { font-size: 16px; }
+    .chars button { width: calc(33.33% - 7px); }
+  }
+
   .hidden { display: none !important; }
 
   /* Without backdrop blur, the glass doubles its opacity so text stays readable. */
@@ -327,6 +402,21 @@
 
   <main>
     <div class="col">
+      <section class="glass companion" aria-label="Your companion">
+        <div class="face" id="face" data-state="sleep"></div>
+        <div class="cbody">
+          <p class="lbl" id="cname">Noa</p>
+          <p class="cline" id="cline" aria-live="polite">Your vault is locked. I cannot read a thing until you open it.</p>
+          <details class="cpick"><summary>Change character</summary>
+            <div class="chars" id="chars" role="group" aria-label="Characters"></div>
+            <div class="callme">
+              <label class="flabel" for="callme">What should I call you?</label>
+              <div class="row"><input class="plain" id="callme" maxlength="40" placeholder="Your first name" autocomplete="given-name"><button class="ghost" id="callmesave" type="button">Save</button></div>
+              <p class="dim" id="callmehint">Sealed in your vault and never sent. Unlock first.</p>
+            </div>
+          </details>
+        </div>
+      </section>
       <section class="glass" id="lock">
         <div class="head"><h2 class="lbl">Your vault</h2></div>
         <p class="big" style="margin:0">NOAI answers questions about your notes. The notes stay sealed in this browser, and the model only sees the few redacted lines the receipt tape shows you.</p>
