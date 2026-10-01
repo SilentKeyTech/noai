@@ -84,13 +84,24 @@ Names of people are hidden on the device as `[PERSON_1]`, `[PERSON_2]` and put b
 
 Before every disclosure NOAI reads the whole vault on the device and collects every person it names: names the rules above find in any note, the people who wrote in an imported WhatsApp chat, and imported contacts. Those names are hidden in whatever is sent, even in a passage where nothing points at them. So "My accountant is Zorbek Tamarind" in one note means "Zorbek paid the deposit" in another goes out as "[PERSON_1] paid the deposit". The list is rebuilt for each question and never stored or sent.
 
+Spellings count as one person. For about forty common Arabic names, the usual English spellings and short forms and the Arabic script are one name: Mohd, Mhmd, Mohmd, Mhd, Mohammed, Muhammad and محمد all become the same `[PERSON_1]`, and each of them is hidden even when nothing points at it. For anyone else, teach it in a note or a memory, in English or Arabic, and both names are hidden as one person:
+
+```text
+remember that Hamoudi is short for Mohammed Haddad
+remember that Zizou is a nickname for Ziad Karam
+حمودي اختصار لمحمد
+```
+
+A nickname saved on an imported contact works the same way. `noai people` lists what it has learned.
+
 Two things a known name does not swallow: a place named after a person ("King Fahd Road", "مستشفى الملك فيصل") stays as written, and a contact called Will or May hides the full name but not the everyday word "will" or "may".
 
 What it does not do, stated plainly:
 
 - A name that no note points at, that is not a common given name, and that is not in your imported contacts is sent as written (test: `LIMIT: a name the vault never points at and no contact holds still leaves the device`).
 - It can hide too much. A contact called Grace also hides "grace" in "the grace period", and a word wrongly taken for a name after a cue ("my boss Approved") is hidden everywhere in the vault after that. Over-hiding costs answer quality, not privacy.
-- Nicknames, misspellings and transliterations are different names to it: Mohammed, Mohamed and محمد are matched as three names, not one person.
+- A spelling that is not in its built-in list and that you have not taught it is a different name. A typo ("Mohamemd") is not recognised.
+- Built-in spellings are joined by name, not by person: two different people called Mohd and Mohammed with no family name share one placeholder.
 - It hides who, not what. Dates, places, amounts and free text that describes a person ("the tall man from the bank") are sent.
 
 ## Memory
@@ -154,7 +165,7 @@ git clone https://github.com/SilentKeyTech/noai && cd noai
 npm install                     # onnxruntime-web, plus typescript for dev
 npm run model                   # one time: fetch the 23 MB embedding model, hash checked
 echo NEBIUS_API_KEY=your_key > .env
-npm test                        # 110 tests, no network
+npm test                        # 115 tests, no network
 npm run serve                   # http://127.0.0.1:7788
 ```
 

@@ -11,7 +11,7 @@
 import { type Embedder, loadEmbedder } from './embed.ts';
 import { disclose, type GateConfig, type GateResult, type Transport, httpTransport } from './gate.ts';
 import { MEMORY_TITLE, minimalSet, rememberIntent, splitMemories } from './memory.ts';
-import { peopleFromNotes } from './people.ts';
+import { knownPeople } from './people.ts';
 import { Bm25Retriever, HybridRetriever, type Scored } from './retrieve.ts';
 import { detectSkill, type Skill, skillQuestion, splitReminders } from './skills.ts';
 import type { Note } from './types.ts';
@@ -75,7 +75,7 @@ export async function ask(
   // Minimal disclosure is the product, not a setting.
   const chosen = minimalSet(hits, limit).map((h) => h.chunk);
   // Every person the vault names is hidden, not only those the chosen passages point at.
-  const result = await disclose(v, cfg, skill ? skillQuestion(skill, question) : question, chosen, transport, peopleFromNotes(notes));
+  const result = await disclose(v, cfg, skill ? skillQuestion(skill, question) : question, chosen, transport, knownPeople(notes));
 
   const split = splitReminders(result.answer);
   const { answer, facts } = splitMemories(split.answer);

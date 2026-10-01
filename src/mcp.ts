@@ -22,7 +22,7 @@ import type { Embedder } from './embed.ts';
 import { type GateConfig, GateRefused, httpTransport, type Transport } from './gate.ts';
 import { append, readLedger, readReceipts, signDisclosure, verifyLedger } from './ledger.ts';
 import { splitMemories } from './memory.ts';
-import { peopleFromNotes } from './people.ts';
+import { knownPeople } from './people.ts';
 import { redactAll, rehydrate } from './redact.ts';
 import { splitReminders } from './skills.ts';
 import type { DisclosureReceipt } from './types.ts';
@@ -200,7 +200,7 @@ async function callTool(ctx: McpContext, session: McpSession, name: string, args
         .sort((a, b) => a.title.localeCompare(b.title));
       if (!due.length) return text('No upcoming reminders.');
       // The vault holds real values; the client gets the same redaction the model would.
-      const red = redactAll(due.map((n) => `${n.title}: ${n.body}`), { people: peopleFromNotes(notes) });
+      const red = redactAll(due.map((n) => `${n.title}: ${n.body}`), knownPeople(notes));
       const handed = revealOnly(red.texts.join('\n'), red.map, ctx.reveal);
       await receiptHandover(ctx.vault, root, session.client, handed, due.map((n) => ({ noteId: n.id, chunk: 0, chunkHash: sha256(n.body) })));
       return text(handed);

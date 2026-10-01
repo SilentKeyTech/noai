@@ -3,7 +3,7 @@
  * and the browser gate both call these, so a disclosure made in the browser is
  * byte for byte what the desktop would have sent.
  */
-import { redactAll } from './redact.ts';
+import { type RedactOptions, redactAll } from './redact.ts';
 import type { Chunk } from './types.ts';
 
 export const DEFAULT_MODEL = 'nvidia/nemotron-3-super-120b-a12b';
@@ -29,11 +29,11 @@ export function stripThinking(text: string): string {
 
 /**
  * Redact the question and passages with one placeholder space, and build the
- * disclosed prompt. `people` are names to always hide, usually every person
- * the vault names (src/people.ts), found on the device.
+ * disclosed prompt. `known` holds names to always hide and other names for
+ * them, usually everything the vault says about people (src/people.ts).
  */
-export function prepareDisclosure(question: string, chunks: Chunk[], people: string[] = []): { disclosed: string; counts: Record<string, number>; map: Map<string, string> } {
-  const red = redactAll([question, ...chunks.flatMap((c) => [c.title, c.text])], { people });
+export function prepareDisclosure(question: string, chunks: Chunk[], known: RedactOptions = {}): { disclosed: string; counts: Record<string, number>; map: Map<string, string> } {
+  const red = redactAll([question, ...chunks.flatMap((c) => [c.title, c.text])], known);
   const [q = '', ...rest] = red.texts;
   const passages = chunks.map((_, i) => ({ title: rest[i * 2] ?? '', text: rest[i * 2 + 1] ?? '' }));
   return { disclosed: buildPrompt(q, passages), counts: red.counts, map: red.map };

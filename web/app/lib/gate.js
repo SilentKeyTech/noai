@@ -32,11 +32,11 @@ class Unanswered extends Error {
 
 export const httpTransport = (url, init) => fetch(url, init);
 
-export async function disclose(v, cfg, question, chunks, transport = httpTransport, people = []) {
+export async function disclose(v, cfg, question, chunks, transport = httpTransport, known = {}) {
   const started = Date.now();
 
   // 1. redact, with one placeholder space across question and passages
-  const red = prepareDisclosure(question, chunks, people);
+  const red = prepareDisclosure(question, chunks, known);
 
   // 5. receipt, signed and chained, for every attempt that sent bytes
   const receiptFor = async (model, body, text, usage, outcome) => {

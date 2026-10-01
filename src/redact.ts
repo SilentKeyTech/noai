@@ -17,6 +17,7 @@
  */
 import {
   ARABIC_PREFIXES,
+  canonName,
   CUE_ARABIC,
   CUE_LATIN_RELATION,
   CUE_LATIN_TITLE,
@@ -104,6 +105,13 @@ export interface Redaction {
 export interface RedactOptions {
   /** Names the owner has listed as people to always hide, in any script. */
   people?: string[];
+  /**
+   * Other names for a person, as [other, name] pairs: a nickname or a spelling
+   * the owner taught ("Hamoudi is short for Mohammed Haddad"). Both are hidden,
+   * under one placeholder. Spellings of common names (Mohd, Mhmd, محمد) are
+   * already one name, see SPELLINGS in names.ts.
+   */
+  same?: [string, string][];
 }
 
 class Placeholders {
@@ -167,7 +175,7 @@ function tokenize(text: string, known: Set<string>): Token[] {
     if (!ar && /['’]s$/i.test(raw) && raw.length > 3) raw = raw.slice(0, -2);
     let n = normToken(raw);
     if (ar && n.length >= 4 && ARABIC_PREFIXES.includes(n[0] ?? '')) {
-      const rest = n.slice(1);
+      const rest = canonName(n.slice(1));
       if (GIVEN_ARABIC.has(rest) || known.has(rest)) {
         n = rest;
         cs += 1;
@@ -320,11 +328,23 @@ function locateNames(text: string, keys: string[][], alias: Map<string, string>)
   return spans;
 }
 
-function redactNames(texts: string[], ph: Placeholders, people: string[]): string[] {
+const keyOf = (name: string): string => name.trim().split(/\s+/).filter(Boolean).map(normToken).join(' ');
+
+function redactNames(texts: string[], ph: Placeholders, people: string[], same: [string, string][]): string[] {
   const surface = new Map<string, string>();
   for (const p of people) {
-    const key = p.trim().split(/\s+/).filter(Boolean).map(normToken).join(' ');
+    const key = keyOf(p);
     if (key && !surface.has(key)) surface.set(key, p.trim());
+  }
+  // A taught other name is found like any name, and numbered as the person it stands for.
+  const stands = new Map<string, string>();
+  for (const [other, name] of same) {
+    const o = keyOf(other);
+    const n = keyOf(name);
+    if (!o || !n || o === n) continue;
+    if (!surface.has(n)) surface.set(n, name.trim());
+    if (!surface.has(o)) surface.set(o, other.trim());
+    stands.set(o, n);
   }
   for (const t of texts) for (const f of findNames(t)) if (!surface.has(f.key)) surface.set(f.key, f.surface);
   if (surface.size === 0) return texts;
@@ -348,7 +368,10 @@ function redactNames(texts: string[], ph: Placeholders, people: string[]): strin
 
   return texts.map((text) => {
     // Numbered in reading order, spliced from the end so offsets stay valid.
-    const spans = locateNames(text, keys, alias).map((s) => ({ ...s, ph: ph.get('PERSON', s.key, surface.get(s.key) ?? text.slice(s.from, s.to)) }));
+    const spans = locateNames(text, keys, alias).map((s) => {
+      const key = stands.get(s.key) ?? s.key;
+      return { ...s, ph: ph.get('PERSON', key, surface.get(key) ?? text.slice(s.from, s.to)) };
+    });
     let out = text;
     for (const s of spans.reverse()) out = out.slice(0, s.from) + s.ph + out.slice(s.to);
     return out;
@@ -362,7 +385,7 @@ function redactNames(texts: string[], ph: Placeholders, people: string[]): strin
 export function redactAll(texts: string[], opts: RedactOptions = {}): { texts: string[]; counts: Record<string, number>; map: Map<string, string> } {
   const ph = new Placeholders();
   const structured = texts.map((t) => redactStructured(t, ph));
-  const out = redactNames(structured, ph, opts.people ?? []);
+  const out = redactNames(structured, ph, opts.people ?? [], opts.same ?? []);
   return { texts: out, counts: ph.counts, map: ph.map };
 }
 

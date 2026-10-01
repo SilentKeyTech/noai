@@ -68,18 +68,77 @@ export function cleanName(raw: string): string | null {
   return words.join(' ');
 }
 
-/** Every person the vault names, once each, in the order first seen. */
-export function peopleFromNotes(notes: NoteLike[]): string[] {
+/**
+ * The owner teaching another name for someone, in a note or a memory:
+ *   "Hamoudi is short for Mohammed Haddad", "Mo is a nickname for Mohammed",
+ *   "Mhmd is also written Mohammed", "حمودي اختصار لمحمد", "أبو علي اسم دلع ل..."
+ */
+const TAUGHT = [
+  /(?:^|[.!?;:]\s+)([^.!?,;:\n]{1,60}?) is (?:short for|a nickname for|another name for|another spelling of|also written|also spelled|also spelt) ([^.!?,;:\n]{1,60})/gim,
+  /(?:^|[.!?;:،؛]\s+)([^.!?,;:،؛\n]{1,60}?) (?:اختصار|اسم دلع|لقب) (?:لاسم|لـ|ل)\s*([^.!?,;:،؛\n]{1,60})/gm,
+];
+const CONTACT_NICK = /^Nickname: (.+)$/gm;
+
+/** A word that can be part of a name: Arabic and not a function word, or Latin with a capital or a given name. */
+function namePart(w: string): boolean {
+  const n = normToken(w);
+  if (ARABIC.test(w)) return !STOP_ARABIC.has(n) && !CUE_ARABIC.has(n);
+  return !STOP_LATIN.has(n) && (/^\p{Lu}/u.test(w) || GIVEN_LATIN.has(n));
+}
+
+/** The name at one end of a phrase: "my cousin Hamoudi" -> "Hamoudi", "Mohammed Haddad who lives" -> "Mohammed Haddad". */
+function nameAtEnd(phrase: string, end: 'start' | 'end'): string | null {
+  const all = [...phrase.normalize('NFKC').matchAll(WORD)].map((m) => m[0]);
+  const words = end === 'end' ? [...all].reverse() : all;
+  const kept: string[] = [];
+  for (const w of words) {
+    if (!namePart(w) || kept.length === 5) break;
+    kept.push(w);
+  }
+  if (end === 'end') kept.reverse();
+  // An owner who types in lower case still means a name: "hamoudi is short for mohammed".
+  if (kept.length === 0 && words.length > 0 && words.length <= 2) {
+    return all.some((w) => STOP_LATIN.has(normToken(w)) || STOP_ARABIC.has(normToken(w))) ? null : all.join(' ');
+  }
+  return cleanName(kept.join(' '));
+}
+
+export interface KnownPeople {
+  /** every person the vault names, once each, in the order first seen */
+  people: string[];
+  /** [other name, name] pairs the owner taught or a contact holds */
+  same: [string, string][];
+}
+
+/** Everything the vault says about who people are, ready for redactAll's options. */
+export function knownPeople(notes: NoteLike[]): KnownPeople {
   const out = new Map<string, string>();
+  const same: [string, string][] = [];
   const add = (name: string | null): void => {
     if (!name) return;
     const key = name.split(/\s+/).map(normToken).join(' ');
     if (!out.has(key)) out.set(key, name);
   };
+  const link = (other: string | null, name: string | null): void => {
+    if (!other || !name) return;
+    add(name);
+    add(other);
+    same.push([other, name]);
+  };
   for (const n of notes) {
-    if (CONTACT_TITLE.test(n.title)) add(cleanName(CONTACT_NAME.exec(n.body)?.[1] ?? ''));
+    if (CONTACT_TITLE.test(n.title)) {
+      const name = cleanName(CONTACT_NAME.exec(n.body)?.[1] ?? '');
+      add(name);
+      for (const m of n.body.matchAll(CONTACT_NICK)) for (const nick of (m[1] ?? '').split(',')) link(cleanName(nick), name);
+    }
     for (const m of n.body.matchAll(WA_LINE)) add(cleanName(m[1] ?? ''));
+    for (const re of TAUGHT) for (const m of n.body.matchAll(re)) link(nameAtEnd(m[1] ?? '', 'end'), nameAtEnd(m[2] ?? '', 'start'));
     for (const text of [n.title, n.body]) for (const f of findPeople(text)) add(f);
   }
-  return [...out.values()];
+  return { people: [...out.values()], same };
+}
+
+/** Every person the vault names, once each, in the order first seen. */
+export function peopleFromNotes(notes: NoteLike[]): string[] {
+  return knownPeople(notes).people;
 }

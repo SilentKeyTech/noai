@@ -12,7 +12,7 @@ import { ask } from '../src/agent.ts';
 import type { GateConfig, Transport } from '../src/gate.ts';
 import { importFile } from '../src/importer.ts';
 import { ingestText, parseVcard } from '../src/ingest.ts';
-import { cleanName, peopleFromNotes } from '../src/people.ts';
+import { cleanName, knownPeople, peopleFromNotes } from '../src/people.ts';
 import { redactAll, rehydrate } from '../src/redact.ts';
 import { addNote, createVault } from '../src/vault.ts';
 // @ts-expect-error plain JavaScript module, generated and tested as is
@@ -178,6 +178,54 @@ describe('a name pointed at once is hidden everywhere', () => {
     const r = (await webRespond(v, browserCfg, 'Who paid the deposit for the flat?', { transport, k: 1 })) as { answer: string };
     assert.ok(!sent[0]!.includes('Zorbek'), 'a name the vault knows left the browser');
     assert.match(r.answer, /Zorbek/);
+  });
+});
+
+describe('spellings of one name', () => {
+  it('hides short spellings like Mohd, Mhmd and Mohmd with nothing pointing at them', () => {
+    for (const s of ['Mohd', 'Mhmd', 'Mohmd', 'Mhd', 'Muhd']) {
+      const r = redactAll([`${s} called about the car.`]);
+      assert.equal(r.texts[0], '[PERSON_1] called about the car.', s);
+      assert.equal(rehydrate(r.texts[0]!, r.map), `${s} called about the car.`);
+    }
+  });
+
+  it('counts Mohd, Mhmd, Mohammed, Muhammad and محمد as one person', () => {
+    const r = redactAll(['Mohd called.', 'Mhmd Haddad paid. Mohammed Haddad left.', 'Muhammad agreed.', 'اتصل بمحمد غدا.']);
+    assert.deepEqual(r.texts, ['[PERSON_1] called.', '[PERSON_1] paid. [PERSON_1] left.', '[PERSON_1] agreed.', 'اتصل ب[PERSON_1] غدا.']);
+    assert.deepEqual(r.counts, { PERSON: 1 });
+  });
+
+  it('learns a spelling the owner teaches, and hides it as the same person', async () => {
+    const root = await tmp();
+    const v = await createVault(root, PASS);
+    await addNote(v, 'Memory', 'Hamoudi is short for Mohammed Haddad.', 'memory');
+    await addNote(v, 'Car', 'Hamoudi fixed the car on Sunday.');
+    const { transport, sent } = capture('[PERSON_1] fixed it. [P1]');
+    const r = await ask(v, cfg(root), 'Who fixed the car?', 1, transport);
+    assert.ok(!sent[0]!.includes('Hamoudi'), 'a taught spelling left the device');
+    assert.ok(sent[0]!.includes('[PERSON_1] fixed the car'));
+    assert.match(r.answer, /Mohammed Haddad fixed it/, 'the owner reads the full name back');
+  });
+
+  it('reads taught spellings mid-sentence, in lower case, and in Arabic', () => {
+    const k = knownPeople([
+      { title: 'Family', body: 'We visited Beirut. My cousin Zizou is a nickname for Ziad Karam, who lives there.' },
+      { title: 'Memory', body: 'koko is short for Kamal' },
+      { title: 'ملاحظة', body: 'زكزوك اختصار لزكرياوي' },
+    ]);
+    assert.deepEqual(k.same, [['Zizou', 'Ziad Karam'], ['koko', 'Kamal'], ['زكزوك', 'زكرياوي']]);
+    const r = redactAll(['Zizou and koko came. وصل زكزوك.'], k);
+    assert.ok(!/Zizou|koko|زكزوك/.test(r.texts[0]!), r.texts[0]);
+  });
+
+  it('takes nicknames from contacts', () => {
+    const parsed = parseVcard('BEGIN:VCARD\nVERSION:3.0\nFN:Abdulrahman Otaibi\nNICKNAME:Aboody,Dahoom\nEND:VCARD\n');
+    assert.equal(parsed.notes[0]!.body, 'Name: Abdulrahman Otaibi\nNickname: Aboody, Dahoom');
+    const k = knownPeople(parsed.notes);
+    assert.deepEqual(k.same, [['Aboody', 'Abdulrahman Otaibi'], ['Dahoom', 'Abdulrahman Otaibi']]);
+    const r = redactAll(['Aboody and Dahoom both called.'], k);
+    assert.equal(r.texts[0], '[PERSON_1] and [PERSON_1] both called.');
   });
 });
 

@@ -288,6 +288,8 @@ export function parseVcard(text: string): Ingested {
         const name = (card.FN?.[0] ?? '').trim() || fromN;
         const body: string[] = [];
         if (name) body.push(`Name: ${name}`);
+        const nick = (card.NICKNAME ?? []).flatMap((x) => x.split(',')).map((x) => x.trim()).filter(Boolean).join(', ');
+        if (nick) body.push(`Nickname: ${nick}`);
         for (const t of card.TEL ?? []) body.push(`Phone: ${t}`);
         for (const e of card.EMAIL ?? []) body.push(`Email: ${e}`);
         const org = parts(card.ORG?.[0] ?? '').filter(Boolean).join(', ');
@@ -317,7 +319,7 @@ export function parseVcard(text: string): Ingested {
       value = decodeQp(value, cs.toLowerCase());
     }
     value = value.trim();
-    if (!value || !['FN', 'N', 'TEL', 'EMAIL', 'ORG', 'TITLE', 'BDAY', 'ADR', 'NOTE'].includes(prop)) continue;
+    if (!value || !['FN', 'N', 'NICKNAME', 'TEL', 'EMAIL', 'ORG', 'TITLE', 'BDAY', 'ADR', 'NOTE'].includes(prop)) continue;
     if (prop !== 'N' && prop !== 'ORG' && prop !== 'ADR' && prop !== 'NOTE' && prop !== 'TITLE') value = unescapeV(value);
     (card[prop] ??= []).push(value);
   }

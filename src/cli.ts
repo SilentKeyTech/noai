@@ -9,7 +9,7 @@ import { ask, remember } from './agent.ts';
 import { configFromEnv } from './gate.ts';
 import { importFile } from './importer.ts';
 import { noaiHome } from './home.ts';
-import { peopleFromNotes } from './people.ts';
+import { knownPeople } from './people.ts';
 import { readLedger, readReceipts, verifyLedger } from './ledger.ts';
 import { addNote, closeVault, createVault, openVault, readNotes, signerFingerprint } from './vault.ts';
 
@@ -72,10 +72,12 @@ async function main(): Promise<void> {
     case 'people': {
       // Printed here, on this machine, for the owner to check. Nothing is sent.
       const v = await openVault(root, passphrase());
-      const people = peopleFromNotes(readNotes(v));
+      const { people, same } = knownPeople(readNotes(v));
       console.log(`${String(people.length)} people named in the vault are always hidden as [PERSON_n] before anything is sent:`);
       for (const p of people) console.log(`  ${p}`);
-      console.log('A name not on this list is hidden only when the text points at it. Import contacts (.vcf) to add people.');
+      if (same.length) console.log('Other names you taught, hidden as the same person:');
+      for (const [other, name] of same) console.log(`  ${other} = ${name}`);
+      console.log('A name not on this list is hidden only when the text points at it. Import contacts (.vcf) to add people, or teach a spelling: remember that Mhmd is short for Mohammed Haddad.');
       closeVault(v);
       return;
     }
