@@ -63,6 +63,10 @@ step('compiling the launcher');
 const csc = join(process.env.WINDIR ?? 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
 if (!existsSync(csc)) throw new Error(`No C# compiler at ${csc}.`);
 execFileSync(csc, ['/nologo', '/target:exe', '/platform:x64', '/optimize+', `/out:${join(stage, 'noai-vault.exe')}`, join(here, 'launcher.cs')], { stdio: 'inherit' });
+// The app people open: a windowed program, no console, with the tray icon.
+execFileSync(csc, ['/nologo', '/target:winexe', '/platform:x64', '/optimize+', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll', `/out:${join(stage, 'NOAI.exe')}`, join(here, 'app.cs')], { stdio: 'inherit' });
+step('copying the NOAI window');
+await cp(join(repo, 'dashboard'), join(stage, 'app', 'dashboard'), { recursive: true });
 
 // 4. Manifest and icons.
 step(`writing the manifest, version ${version}`);

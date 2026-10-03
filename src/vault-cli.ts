@@ -22,7 +22,11 @@ import { basename, join, resolve } from 'node:path';
 import { configFromEnv, printable, runWithSecrets } from './gate.ts';
 import { noaiHome } from './home.ts';
 import { readLedger, readReceipts, signersOf, verifyLedger } from './ledger.ts';
-import { createMcpServer } from './mcp-serve.ts';
+import { createAppServer, createMcpServer } from './mcp-serve.ts';
+import { randomBytes } from 'node:crypto';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { AppState } from './dashboard.ts';
 import { addSecret, listSecrets, mcpToken, placeholderFor, removeSecret, revealSecret } from './secrets.ts';
 import type { Placement, SignedReceipt, SignedSecretUse } from './types.ts';
 import { closeVault, createVault, openVault, type OpenVault, signerFingerprint, vaultPathFor } from './vault.ts';
@@ -246,6 +250,30 @@ async function main(): Promise<void> {
       } finally {
         closeVault(v);
       }
+      return;
+    }
+    case 'app': {
+      // The NOAI window's back end. Starts locked; the window unlocks it. Run by NOAI.exe, not by people.
+      const port = Number(flags.get('port')?.[0] ?? 7792);
+      const uiToken = flags.get('ui-token')?.[0] ?? randomBytes(24).toString('base64url');
+      const uiDir = resolve(flags.get('ui')?.[0] ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'dashboard'));
+      const mcpUrl = `http://127.0.0.1:${String(port)}/mcp`;
+      const state: AppState = { root, vault: null, mcpUrl };
+      const server = createAppServer({ state, uiDir, uiToken, port });
+      server.on('error', (e: NodeJS.ErrnoException) => {
+        console.error(e.code === 'EADDRINUSE' ? `NOAI_ERROR Another program is using port ${String(port)}. Close it, or another copy of NOAI, and open NOAI again.` : `NOAI_ERROR ${e.message}`);
+        process.exit(1);
+      });
+      server.listen(port, '127.0.0.1', () => {
+        console.log(`NOAI_READY http://127.0.0.1:${String(port)}/app/#k=${uiToken}`);
+      });
+      const quit = () => {
+        if (state.vault) closeVault(state.vault);
+        server.close();
+        process.exit(0);
+      };
+      process.on('SIGINT', quit);
+      process.on('SIGTERM', quit);
       return;
     }
     case 'token': {
