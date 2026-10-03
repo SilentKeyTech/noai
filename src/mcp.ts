@@ -20,7 +20,7 @@ import { respond, sharedEmbedder } from './agent.ts';
 import { newId, scrub, sha256 } from './crypto.ts';
 import type { Embedder } from './embed.ts';
 import { type AgentRequest, type ForwardOptions, forwardWithSecrets, type GateConfig, GateRefused, httpTransport, type Transport } from './gate.ts';
-import { allSecretValues, listSecrets, placeholderFor, redactSecrets } from './secrets.ts';
+import { allSecretValues, listSecrets, placeholderFor, redactSecrets, reloadSecrets } from './secrets.ts';
 import { append, readLedger, readReceipts, signDisclosure, verifyLedger } from './ledger.ts';
 import { splitMemories } from './memory.ts';
 import { knownPeople } from './people.ts';
@@ -170,6 +170,7 @@ function withheld(t: string): Record<string, number> {
 
 /** No tool hands a vault secret to a client, even one the owner pasted into a note by mistake. */
 export function scrubSecrets(v: OpenVault, t: string): string {
+  reloadSecrets(v);
   const all = allSecretValues(v);
   if (!all.length) return t;
   const out = redactSecrets(t, all).text;
@@ -225,6 +226,7 @@ async function callTool(ctx: McpContext, session: McpSession, name: string, args
   if (!toolsFor(ctx.toolset).some((t) => t.name === name)) return null;
   switch (name) {
     case 'list_secrets': {
+      reloadSecrets(ctx.vault);
       const secrets = listSecrets(ctx.vault).map((s) => ({
         name: s.name,
         placeholder: placeholderFor(s.name, s.kind === 'file' ? 'base64' : undefined),
@@ -343,7 +345,7 @@ export async function handleRpc(ctx: McpContext, session: McpSession | null, msg
         return result ? ok(id, result) : fail(id, -32602, `Unknown tool: ${name}`);
       } catch (e) {
         // A refusal or a model failure is a tool result the assistant can read out, not a protocol error.
-        const why = e instanceof Error ? e.message : String(e);
+        const why = scrubSecrets(ctx.vault, e instanceof Error ? e.message : String(e));
         return ok(id, text(e instanceof GateRefused ? why : `NOAI could not answer: ${why}`, true));
       }
     }

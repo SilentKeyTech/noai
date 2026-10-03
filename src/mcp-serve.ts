@@ -20,7 +20,7 @@ import { pathToFileURL } from 'node:url';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { configFromEnv } from './gate.ts';
 import { noaiHome } from './home.ts';
-import { handleRpc, type McpContext, type McpSession, PROTOCOL_VERSIONS } from './mcp.ts';
+import { handleRpc, type McpContext, type McpSession, PROTOCOL_VERSIONS, scrubSecrets } from './mcp.ts';
 import { newId } from './crypto.ts';
 import { openVault } from './vault.ts';
 
@@ -110,6 +110,8 @@ export function createMcpServer(opts: McpServerOptions): Server {
       const name = typeof params?.clientInfo?.name === 'string' ? params.clientInfo.name : 'unknown';
       const id = newId();
       // The client's own name, cleaned, is what every receipt for this session will say.
+      // Bounded: the oldest session is dropped once there are 64, so a client cannot grow this without limit.
+      if (sessions.size >= 64) sessions.delete(sessions.keys().next().value as string);
       sessions.set(id, { client: name.replace(/[^\w.@+-]/g, '_').slice(0, 64) || 'unknown', protocolVersion: (reply.result as { protocolVersion: string }).protocolVersion });
       return send(res, 200, reply, { 'mcp-session-id': id });
     }
@@ -117,7 +119,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
   };
 
   return createServer((req, res) => {
-    handle(req, res).catch((e: unknown) => send(res, 500, { error: e instanceof Error ? e.message : String(e) }));
+    handle(req, res).catch((e: unknown) => send(res, 500, { error: scrubSecrets(opts.ctx.vault, e instanceof Error ? e.message : String(e)) }));
   });
 }
 

@@ -15,6 +15,8 @@
  */
 import { newId, open as unseal, scrub, seal } from './crypto.ts';
 import type { Placement, SealedSecret } from './types.ts';
+import { existsSync, readFileSync } from 'node:fs';
+import type { Vault } from './types.ts';
 import { type OpenVault, writeVault } from './vault.ts';
 
 export type SecretKind = 'text' | 'file';
@@ -124,6 +126,7 @@ export async function addSecret(v: OpenVault, s: NewSecret, opts: { replace?: bo
   const placements = [...new Set(s.placements?.length ? s.placements : (['header'] as Placement[]))];
   for (const p of placements) if (!PLACEMENTS.includes(p)) throw new Error(`"${p}" is not a place in a request. Use header, url or body.`);
 
+  reloadSecrets(v);
   const existing = findRecord(v, name);
   if (existing && !opts.replace) throw new Error(`A secret named ${name} is already in the vault. Remove it first, or replace it deliberately.`);
   if (existing) delete v.data.secrets?.[existing.record.id];
@@ -134,6 +137,7 @@ export async function addSecret(v: OpenVault, s: NewSecret, opts: { replace?: bo
   const record: SealedSecret = { id, sealed: seal(v.masterKey, plain, aad(id)), addedAt: new Date().toISOString() };
   scrub(plain);
   v.data.secrets = { ...(v.data.secrets ?? {}), [id]: record };
+  v.secretsChanged = true;
   await writeVault(v);
   return metaOf(record, body);
 }
@@ -151,9 +155,11 @@ export function findSecret(v: OpenVault, name: string): SecretMeta | null {
 
 /** Removing is a real delete of the sealed entry, not a flag. */
 export async function removeSecret(v: OpenVault, name: string): Promise<boolean> {
+  reloadSecrets(v);
   const f = findRecord(v, name);
   if (!f) return false;
   delete v.data.secrets?.[f.record.id];
+  v.secretsChanged = true;
   await writeVault(v);
   return true;
 }
@@ -190,17 +196,49 @@ function isPlainText(b: Buffer): boolean {
  * re-encoded, base64 of it joined with other text) is not caught. The defence
  * against that is the host and placement policy, not this scrub.
  */
-export function redactSecrets(text: string, secrets: { name: string; value: Buffer }[]): { text: string; count: number } {
+function formsOf(secrets: { name: string; value: Buffer }[]): { form: string; name: string }[] {
   const forms: { form: string; name: string }[] = [];
   for (const s of secrets) {
+    // A binary file echoed raw arrives through the same lossy UTF-8 decoding, so its decoded form still matches.
     const asText = s.value.toString('utf8');
     const b64 = s.value.toString('base64');
-    const variants = [b64, b64.replace(/=+$/, ''), s.value.toString('base64url'), s.value.toString('hex'), s.value.toString('hex').toUpperCase()];
-    if (Buffer.from(asText, 'utf8').equals(s.value)) variants.push(asText, encodeURIComponent(asText));
+    const pct = encodeURIComponent(asText);
+    const variants = [
+      b64,
+      b64.replace(/=+$/, ''),
+      s.value.toString('base64url'),
+      s.value.toString('hex'),
+      s.value.toString('hex').toUpperCase(),
+      asText,
+      pct,
+      pct.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()),
+      // as a JSON string would carry it, escapes and all
+      JSON.stringify(asText).slice(1, -1),
+      JSON.stringify(asText).slice(1, -1).replaceAll('/', '\\/'),
+    ];
     for (const f of new Set(variants)) if (f.length >= MIN_SECRET_BYTES) forms.push({ form: f, name: s.name });
   }
   // Longest first, so a form that contains another is replaced whole.
-  forms.sort((a, b) => b.form.length - a.form.length);
+  return forms.sort((a, b) => b.form.length - a.form.length);
+}
+
+/**
+ * For a response that was cut at the size limit: if the cut fell inside a
+ * secret, the text ends with the start of one of its forms, which the whole-form
+ * scrub cannot see. Blank that tail. Fewer than 4 characters of a secret say
+ * next to nothing, so shorter tails are left alone.
+ */
+export function blankCutTail(text: string, secrets: { name: string; value: Buffer }[]): { text: string; count: number } {
+  for (const { form, name } of formsOf(secrets)) {
+    for (let k = Math.min(form.length - 1, text.length); k >= 4; k--) {
+      if (text.endsWith(form.slice(0, k))) return { text: `${text.slice(0, text.length - k)}${placeholderFor(name)}`, count: 1 };
+    }
+  }
+  return { text, count: 0 };
+}
+
+export function redactSecrets(text: string, secrets: { name: string; value: Buffer }[]): { text: string; count: number } {
+  const forms = formsOf(secrets);
   let out = text;
   let count = 0;
   for (const { form, name } of forms) {
@@ -218,10 +256,27 @@ export function redactSecrets(text: string, secrets: { name: string; value: Buff
  * so starting the server again does not mean reconfiguring the agent.
  */
 export async function mcpToken(v: OpenVault, opts: { rotate?: boolean } = {}): Promise<string> {
+  reloadSecrets(v);
   const aadToken = Buffer.from('noai.mcp-token', 'utf8');
   if (v.data.mcpToken && !opts.rotate) return unseal(v.masterKey, v.data.mcpToken, aadToken).toString('utf8');
   const token = `noai_${newId()}${newId()}${newId()}`;
   v.data.mcpToken = seal(v.masterKey, Buffer.from(token, 'utf8'), aadToken);
+  v.secretsChanged = true;
   await writeVault(v);
   return token;
+}
+
+/**
+ * Take the secrets as they are on disk now. The vault file is the one source of
+ * truth: a secret the owner removes or narrows in one window stops working in a
+ * server that is already running, at its next request.
+ */
+export function reloadSecrets(v: OpenVault): void {
+  if (!existsSync(v.path)) return;
+  const disk = JSON.parse(readFileSync(v.path, 'utf8')) as Vault;
+  if (disk.device?.publicKey !== v.data.device.publicKey) return;
+  if (disk.secrets) v.data.secrets = disk.secrets;
+  else delete v.data.secrets;
+  if (disk.mcpToken) v.data.mcpToken = disk.mcpToken;
+  else delete v.data.mcpToken;
 }

@@ -157,10 +157,21 @@ npm run vault -- run --env STORE_PASSWORD=keystore_password --file KEYSTORE=play
 
 - **This is not a wall between programs.** Claude Code runs as your Windows user. An agent that can run any shell command as you could in principle attack the vault process, or a file you exported. The vault means the key is never in the agent's context, its logs, or its model provider's servers. Keep Claude Code's permission prompts on, and never give an agent the passphrase.
 - **An allowed host can still be misused.** If a secret may go in the body of requests to a host that stores what it receives (for example a gist or an issue), an agent could store the secret there. That is why the default is header only. Allow `body` only for hosts and secrets that need it.
-- **Blanking echoes catches the usual forms**: the value as it is, base64, URL-encoded and hex. A response that returns the secret changed some other way is not caught. The host and placement rules are the main protection.
+- **Blanking echoes catches the usual forms**: the value as it is, base64, URL-encoded (either case), hex and JSON-escaped. If a response is cut at the size limit in the middle of a secret, the cut-off start is blanked too. A response that returns the secret changed some other way is not caught. The host and placement rules are the main protection.
 - **Redirects are not followed**, so a secret is never carried to a second host. The agent sees the 3xx response and can decide what to do next.
 - **A receipt is a signed statement by your device.** It proves what your device sent and refused, and that nothing was edited or removed afterwards. It cannot prove what the remote API did with the request.
 - **Memory.** After each request, NOAI wipes the buffers that held the value. Text strings made from the value cannot be wiped in JavaScript, and stay in the server's memory until it is reused.
 - **A program you run with `vault run` gets the real values.** NOAI controls which program, for how long, and what you see printed. It cannot control what that program does with the values. Only run tools you trust, such as Gradle, keytool and apksigner.
 - **The temporary keystore file is overwritten and deleted after the run.** An SSD, a backup or an antivirus scan may still keep an old copy of the blocks on disk.
 - **No independent security review yet.**
+
+## Internal security check, 3 Oct 2026
+
+Before any independent review, a separate Claude session looked for ways around the vault and tried each idea out in code, offline. It confirmed four problems, and all four are fixed, each with its own test (`V9` in `test/vault.test.ts`):
+
+1. A response cut off at the size limit in the middle of an echoed secret handed back most of that secret. The cut-off start is now blanked.
+2. A program started with `vault run` could read the vault passphrase if it was set in the terminal. Programs now never see any `NOAI_` or `NEBIUS_` variable, or any variable that already holds a vault secret.
+3. Removing a secret did not stop a vault server that was already running, and the server could write the secret back. The vault file is now the only source of truth: a change made in one window applies to the next request everywhere.
+4. An agent could put terminal control characters into a receipt, which could scramble what `vault receipts` showed. Methods outside the allowed list are recorded as `INVALID`, and control characters are replaced, both in receipts and on screen.
+
+Smaller items were fixed too. Echoes in JSON-escaped or lower-case percent-encoded form are now blanked. A text secret named as `%VAR%` in the arguments of a `.bat` or `.cmd` program is refused. Error text is scrubbed. The MCP server keeps at most 64 sessions. Ctrl+C at a passphrase prompt now exits cleanly. This check was done by the same kind of tool that wrote the code. It is not a substitute for an independent review.

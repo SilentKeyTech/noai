@@ -29,7 +29,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { allSecretValues, findSecret, PLACEHOLDER, redactSecrets, revealSecret } from './secrets.ts';
+import { allSecretValues, blankCutTail, findSecret, MIN_SECRET_BYTES, PLACEHOLDER, redactSecrets, reloadSecrets, revealSecret } from './secrets.ts';
 
 export interface GateConfig {
   root: string;
@@ -278,6 +278,8 @@ export interface ForwardResult {
 }
 
 const METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
+/** Control characters replaced, so text an agent wrote cannot move the owner's cursor or erase lines when printed. */
+export const printable = (s: string): string => s.replace(/[\x00-\x1f\x7f-\x9f]/g, '?');
 /** Set by the transport, never by the agent. */
 const DROPPED = new Set(['host', 'content-length', 'connection', 'transfer-encoding', 'keep-alive', 'upgrade', 'te', 'trailer', 'proxy-authorization', 'proxy-connection']);
 
@@ -316,7 +318,11 @@ export async function forwardWithSecrets(v: OpenVault, root: string, client: str
 
   let host = '';
   let path = '/';
+  // The vault file decides, not this process's memory: a secret removed in another window is gone now.
+  reloadSecrets(v);
   const metas = new Map([...uses.keys()].map((n) => [n, findSecret(v, n)]));
+  // Only a known method, and no control characters, go on a receipt the owner will print.
+  const recordedMethod = METHODS.has(method) ? method : 'INVALID';
 
   const receiptFor = async (outcome: SecretUseReceipt['outcome'], status: number | null, handed: string, echoes: number, reason?: string) => {
     const receipt: SecretUseReceipt = {
@@ -330,14 +336,14 @@ export async function forwardWithSecrets(v: OpenVault, root: string, client: str
       at: new Date().toISOString(),
       client,
       secrets: [...uses].map(([name, where]) => ({ id: metas.get(name)?.id ?? null, name, placements: [...where].sort() })),
-      method,
+      method: recordedMethod,
       host,
-      path,
+      path: printable(path).slice(0, 512),
       requestHash: sha256(template),
       requestBytes: Buffer.byteLength(template, 'utf8'),
       outcome,
       status,
-      ...(reason ? { reason } : {}),
+      ...(reason ? { reason: printable(reason) } : {}),
       responseHash: sha256(handed),
       responseBytes: Buffer.byteLength(handed, 'utf8'),
       echoesRedacted: echoes,
@@ -369,7 +375,7 @@ export async function forwardWithSecrets(v: OpenVault, root: string, client: str
   host = parsed.host.toLowerCase();
   if (parsed.protocol !== 'https:') return refuse('Only https requests can carry a secret.');
   if (parsed.username || parsed.password) return refuse('A URL with a user name or password in it cannot carry a secret.');
-  if (!METHODS.has(method)) return refuse(`${method} is not a method this tool sends.`);
+  if (!METHODS.has(method)) return refuse(`That is not a method this tool sends. Use one of ${[...METHODS].join(', ')}.`);
   if (body !== undefined && (method === 'GET' || method === 'HEAD')) return refuse(`A ${method} request cannot have a body.`);
   for (const k of Object.keys(headersIn)) if (k.includes('{{')) return refuse('A secret cannot go in a header name.');
   for (const [name, where] of uses) {
@@ -437,7 +443,13 @@ export async function forwardWithSecrets(v: OpenVault, root: string, client: str
   } else {
     // Cookies a server sets are credentials minted from the secret. The agent does not need them.
     const lines = res.headers.filter(([k]) => k.toLowerCase() !== 'set-cookie').map(([k, val]) => `${k.toLowerCase()}: ${clean(val)}`);
-    const text = clean(res.body.toString('utf8'));
+    let text = clean(res.body.toString('utf8'));
+    if (res.truncated) {
+      // The cut may have fallen inside an echoed secret, leaving a start the whole-form scrub misses.
+      const cut = blankCutTail(text, all);
+      text = cut.text;
+      echoes += cut.count;
+    }
     handed = [`HTTP ${String(res.status)}`, ...lines, '', text, ...(res.truncated ? [`[response cut at ${String(maxBytes)} bytes]`] : [])].join('\n');
   }
   for (const s of all) scrub(s.value);
@@ -503,6 +515,7 @@ export async function runWithSecrets(v: OpenVault, root: string, req: RunRequest
   const uses = new Map<string, Set<Placement>>();
   for (const name of Object.values(env)) uses.set(name, (uses.get(name) ?? new Set<Placement>()).add('env'));
   for (const name of Object.values(files)) uses.set(name, (uses.get(name) ?? new Set<Placement>()).add('file'));
+  reloadSecrets(v);
   const metas = new Map([...uses.keys()].map((n) => [n, findSecret(v, n)]));
   const hash = createHash('sha256');
   let handedBytes = 0;
@@ -527,7 +540,7 @@ export async function runWithSecrets(v: OpenVault, root: string, req: RunRequest
       requestBytes: Buffer.byteLength(template, 'utf8'),
       outcome,
       status,
-      ...(reason ? { reason } : {}),
+      ...(reason ? { reason: printable(reason) } : {}),
       // what the owner was shown: the tool's output after scrubbing
       responseHash: hash.copy().digest('hex'),
       responseBytes: handedBytes,
@@ -555,7 +568,17 @@ export async function runWithSecrets(v: OpenVault, root: string, req: RunRequest
 
   // 1 and 2. The values exist outside the vault only in this child's environment and
   // in one file inside a folder made for this run.
-  const childEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
+  // The program gets this shell's environment minus everything that opens more than it
+  // was handed: the vault passphrase, the MCP token, any other NOAI or model key, and any
+  // variable that happens to hold a vault secret already.
+  const known = allSecretValues(v);
+  const holdsSecret = (val: string) => known.some((s) => s.value.length >= MIN_SECRET_BYTES && val.includes(s.value.toString('utf8')));
+  const childEnv: Record<string, string> = {};
+  for (const [k, val] of Object.entries(process.env)) {
+    if (val === undefined || /^(NOAI_|NEBIUS_)/i.test(k) || holdsSecret(val)) continue;
+    childEnv[k] = val;
+  }
+  for (const s of known) scrub(s.value);
   let tempDir: string | null = null;
   const buffers: Buffer[] = [];
   const written: { path: string; bytes: number }[] = [];
@@ -615,6 +638,16 @@ export async function runWithSecrets(v: OpenVault, root: string, req: RunRequest
   const e2 = pipe(err);
   // Windows only runs a .bat or .cmd file, gradlew.bat for one, through the shell.
   const viaShell = process.platform === 'win32' && /\.(bat|cmd)$/i.test(req.command);
+  // Through cmd.exe, a %VAR% left in the arguments would be expanded from the environment,
+  // putting a password on the command line where any program can list it.
+  const leaked = viaShell && args.some((a) => Object.keys(env).some((k) => a.toUpperCase().includes(`%${k.toUpperCase()}%`)));
+  if (leaked) {
+    for (const b of buffers) scrub(b);
+    for (const w of written) await writeFile(w.path, Buffer.alloc(w.bytes)).catch(() => undefined);
+    if (tempDir) await rm(tempDir, { recursive: true, force: true });
+    for (const s of all) scrub(s.value);
+    return { ...(await refuse('A text secret may not be named as %VAR% in the arguments: it would end up on the command line. Let the program read the variable itself.')), tempDir };
+  }
   let code: number | null = null;
   let failure = '';
   try {

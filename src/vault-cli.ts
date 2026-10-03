@@ -19,7 +19,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
-import { configFromEnv, runWithSecrets } from './gate.ts';
+import { configFromEnv, printable, runWithSecrets } from './gate.ts';
 import { noaiHome } from './home.ts';
 import { readLedger, readReceipts, signersOf, verifyLedger } from './ledger.ts';
 import { createMcpServer } from './mcp-serve.ts';
@@ -79,6 +79,8 @@ async function askHidden(prompt: string): Promise<string> {
         }
         if (ch === CTRL_C) {
           stdin.setRawMode(false);
+          stdin.pause();
+          stdin.off('data', onData);
           process.stderr.write('\n');
           fail(new Error('Cancelled. Nothing was changed.'));
           return;
@@ -191,7 +193,7 @@ async function main(): Promise<void> {
         const result = r.outcome === 'sent' ? (local ? `exit code ${String(r.status)}` : `sent, HTTP ${String(r.status)}`) : `${r.outcome.toUpperCase()}: ${r.reason ?? ''}`;
         const echoes = r.echoesRedacted ? `, ${String(r.echoesRedacted)} echo(es) blanked` : '';
         const where = local ? `ran ${r.path} on this PC` : `${r.method} ${r.host}${r.path}`;
-        console.log(`${r.at.slice(0, 19).replace('T', ' ')}  ${r.client}  ${what}  ${where}  ${result}${echoes}`);
+        console.log(printable(`${r.at.slice(0, 19).replace('T', ' ')}  ${r.client}  ${what}  ${where}  ${result}${echoes}`));
       }
       return;
     }

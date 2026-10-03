@@ -20,7 +20,7 @@ import { createMcpServer } from '../src/mcp-serve.ts';
 import { toolsFor } from '../src/mcp.ts';
 import { addSecret, findSecret, listSecrets, mcpToken, redactSecrets, removeSecret, revealSecret } from '../src/secrets.ts';
 import type { SignedReceipt, SignedSecretUse } from '../src/types.ts';
-import { addNote, createVault, type OpenVault, signerFingerprint } from '../src/vault.ts';
+import { addNote, createVault, type OpenVault, openVault, readNotes, signerFingerprint } from '../src/vault.ts';
 
 process.env.NOAI_MODEL_DIR = join(tmpdir(), 'noai-no-model-here');
 
@@ -504,5 +504,86 @@ describe('V8 local tools: the owner hands a key to one program for one run', () 
       .filter((f) => f.endsWith('.ts'))
       .filter((f) => /node:child_process|\bchild_process\b/.test(readFileSync(new URL(f, src), 'utf8')));
     assert.deepEqual(spawners, ['gate.ts']);
+  });
+});
+
+describe('V9 regressions from the 3 Oct internal security review', () => {
+  it('V9.1 a response cut inside an echoed secret does not hand over the start of it', async () => {
+    const { root, v } = await vault();
+    const transport: ForwardTransport = async () => ({ status: 200, headers: [], body: Buffer.from(`{"echo":"Bearer ${GH.slice(0, -1)}`), truncated: true });
+    const r = await forwardWithSecrets(v, root, 'claude-code', { url: 'https://api.github.com/user', headers: { Authorization: 'Bearer {{secret:github_token}}' } }, { transport });
+    assert.ok(!r.handed.includes(GH.slice(0, 12)), 'the cut-off start of the secret reached the agent');
+    assert.match(r.handed, /Bearer \{\{secret:github_token\}\}/);
+    assert.equal(r.receipt?.echoesRedacted, 1);
+  });
+
+  it('V9.2 a program run with a key never sees the vault passphrase, NOAI settings, or a variable already holding a secret', async () => {
+    const { root, v } = await vault();
+    const saved = { p: process.env.NOAI_PASSPHRASE, t: process.env.NOAI_MCP_TOKEN, x: process.env.SOME_OLD_TOKEN };
+    process.env.NOAI_PASSPHRASE = PASS;
+    process.env.NOAI_MCP_TOKEN = 'noai_test_token_value_000000000';
+    process.env.SOME_OLD_TOKEN = `prefix ${PLAY}`;
+    try {
+      const seen: string[] = [];
+      const r = await runWithSecrets(
+        v,
+        root,
+        { command: process.execPath, args: ['-e', 'const e=process.env; process.exit((e.NOAI_PASSPHRASE||e.NOAI_MCP_TOKEN||e.SOME_OLD_TOKEN) ? 3 : (e.T ? 7 : 4))'], env: { T: 'github_token' } },
+        { out: (t) => seen.push(t), err: (t) => seen.push(t) },
+      );
+      assert.equal(r.code, 7, seen.join(''));
+    } finally {
+      for (const [k, val] of [['NOAI_PASSPHRASE', saved.p], ['NOAI_MCP_TOKEN', saved.t], ['SOME_OLD_TOKEN', saved.x]] as const) {
+        if (val === undefined) delete process.env[k];
+        else process.env[k] = val;
+      }
+    }
+  });
+
+  it('V9.3 a secret removed in another window stops working in a server that is already running, and is not written back', async () => {
+    const { root, v: server } = await vault();
+    const owner = await openVault(root, PASS);
+    assert.equal(await removeSecret(owner, 'github_token'), true);
+    const api = fakeApi();
+    const r = await forwardWithSecrets(server, root, 'claude-code', { url: 'https://api.github.com/user', headers: { Authorization: 'Bearer {{secret:github_token}}' } }, { transport: api.transport });
+    assert.equal(r.outcome, 'refused');
+    assert.equal(api.seen.length, 0);
+    // The server writing something else (a note) must not resurrect it.
+    await addNote(server, 'Later', 'A note written by the running server.');
+    const fresh = await openVault(root, PASS);
+    assert.equal(findSecret(fresh, 'github_token'), null);
+    assert.equal(readNotes(fresh).length, 1);
+    // And one added in another window works at once.
+    await addSecret(owner, { name: 'new_token', value: Buffer.from('TESTONLY-new-token-value'), hosts: ['api.github.com'] });
+    const n = await forwardWithSecrets(server, root, 'claude-code', { url: 'https://api.github.com/user', headers: { Authorization: 'Bearer {{secret:new_token}}' } }, { transport: api.transport });
+    assert.equal(n.outcome, 'sent');
+  });
+
+  it('V9.4 an agent cannot plant terminal control characters in a receipt', async () => {
+    const { root, v } = await vault();
+    const ESC = String.fromCharCode(27);
+    const r = await forwardWithSecrets(v, root, 'claude-code', { method: `X${ESC}[2KFAKE`, url: `https://api.github.com/a${ESC}[2Kb`, headers: { Authorization: 'Bearer {{secret:github_token}}' } }, { transport: fakeApi().transport });
+    assert.equal(r.outcome, 'refused');
+    const stored = await readFile(receiptsPath(root), 'utf8');
+    assert.ok(!stored.includes(ESC) && !stored.includes('\\u001b'), 'a control character reached the receipt file');
+    assert.equal(r.receipt?.method, 'INVALID');
+  });
+
+  it('V9.5 JSON-escaped and lower-case percent-encoded echoes are blanked too', () => {
+    const s = [{ name: 'k', value: Buffer.from('TESTONLY/abc+def=') }];
+    const json = JSON.stringify({ a: 'TESTONLY/abc+def=' }).replace('/', '\\/');
+    assert.ok(!redactSecrets(json, s).text.includes('abc+def'));
+    assert.ok(!redactSecrets('q=TESTONLY%2fabc%2bdef%3d', s).text.includes('abc'));
+  });
+
+  it('V9.6 through cmd.exe, a text secret named as %VAR% in the arguments is refused', { skip: process.platform !== 'win32' }, async () => {
+    const { root, v } = await vault();
+    const bat = join(root, 'tool.cmd');
+    await writeFile(bat, '@echo off\r\necho %1\r\n');
+    const seen: string[] = [];
+    const r = await runWithSecrets(v, root, { command: bat, args: ['%T%'], env: { T: 'github_token' } }, { out: (t) => seen.push(t), err: (t) => seen.push(t) });
+    assert.equal(r.outcome, 'refused');
+    assert.match(r.reason ?? '', /command line/);
+    assertNoSecret(seen.join(''), GH);
   });
 });
