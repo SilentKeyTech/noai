@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="shot.css"><title>NOAI shot 2</title></head><body><div class="frame">
+<div class="top"><img src="../assets/Square150x150Logo.scale-200.png" alt=""><span class="brand">NOAI AGENT VAULT</span></div>
+<h1>A signed receipt for <em>every</em> key use. Sent or refused.</h1>
+<p class="sub">Each receipt names the key, the site, the time and the agent. Never the key itself. Anyone can check the chain offline, with no account.</p>
+<div class="term"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp; PowerShell</div>
+<pre><span class="c">&gt; noai-vault receipts</span>
+2026-10-01 15:01:26  claude-code  demo_token  GET httpbin.org/headers  <span class="ok">sent, HTTP 200, 1 echo(es) blanked</span>
+2026-10-01 15:01:26  claude-code  demo_token  GET example.org/steal  <span class="no">REFUSED: demo_token may only be sent to httpbin.org, not to example.org.</span>
+
+<span class="c">&gt; noai-vault verify --expect bf45d217e0f0aaa2</span>
+<span class="ok">VALID: All 2 disclosures are intact, signed and in order.</span>
+2 of them are secret uses: 1 sent, 1 refused, 0 failed.
+Signed by bf45d217e0f0aaa2.
+<span class="ok">Every receipt is signed by the expected key bf45d217e0f0aaa2.</span></pre></div>
+<div class="note">Real output from a test run on 1 Oct 2026. Commands shown in their Store form; the test ran them as npm run vault.</div>
+</div></body></html>

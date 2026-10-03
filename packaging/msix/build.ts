@@ -96,6 +96,18 @@ function findMakeAppx(): string | null {
   return null;
 }
 const makeappx = findMakeAppx();
+
+// The icons come in two sizes (scale-100, scale-200) so they stay sharp on high-DPI screens.
+// Windows finds the right one through resources.pri, built by MakePri from the same SDK folder.
+if (makeappx) {
+  const makepri = join(dirname(makeappx), 'makepri.exe');
+  if (!existsSync(makepri)) throw new Error(`No makepri.exe next to ${makeappx}.`);
+  step('indexing the icons with MakePri');
+  const cfg = join(out, 'priconfig.xml');
+  await rm(join(stage, 'resources.pri'), { force: true });
+  execFileSync(makepri, ['createconfig', '/cf', cfg, '/dq', 'en-US', '/pv', '10.0.0', '/o'], { stdio: 'ignore' });
+  execFileSync(makepri, ['new', '/pr', stage, '/cf', cfg, '/mn', join(stage, 'AppxManifest.xml'), '/of', join(stage, 'resources.pri'), '/o'], { stdio: 'ignore' });
+}
 const msix = join(out, `NOAI_${version}_x64.msix`);
 if (!makeappx) {
   console.log(`\nStaged at ${stage}. No MakeAppx.exe found, so no .msix yet. Set MAKEAPPX to its path and run again.`);

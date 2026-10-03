@@ -34,7 +34,8 @@
   </Resources>
 
   <Applications>
-    <Application Id="NOAI" Executable="noai-vault.exe" EntryPoint="Windows.FullTrustApplication">
+    <!-- Several at once: the vault window stays open while terminal commands such as "noai-vault receipts" run. -->
+    <Application Id="NOAI" Executable="noai-vault.exe" EntryPoint="Windows.FullTrustApplication" desktop4:SupportsMultipleInstances="true">
       <uap:VisualElements
         DisplayName="NOAI"
         Description="Start the NOAI agent vault"
