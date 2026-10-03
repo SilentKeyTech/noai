@@ -9,6 +9,7 @@
  *   npm run vault -- receipts [--last <n>]
  *   npm run vault -- verify [--dir <folder>] [--expect <fingerprint>]
  *   npm run vault -- serve [--port <n>]
+ *   npm run vault -- run [--env VAR=secret]... [--file VAR=secret]... -- <command> [args...]
  *   npm run vault -- token [--rotate]
  *
  * The passphrase comes from NOAI_PASSPHRASE, or is asked for without echoing.
@@ -18,7 +19,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
-import { configFromEnv } from './gate.ts';
+import { configFromEnv, runWithSecrets } from './gate.ts';
 import { noaiHome } from './home.ts';
 import { readLedger, readReceipts, signersOf, verifyLedger } from './ledger.ts';
 import { createMcpServer } from './mcp-serve.ts';
@@ -97,6 +98,7 @@ async function passphrase(): Promise<string> {
 }
 
 async function unlock(): Promise<OpenVault> {
+  if (!existsSync(vaultPathFor(root))) throw new Error(`No vault at ${vaultPathFor(root)}. Make one with: npm run vault -- init`);
   return openVault(root, await passphrase());
 }
 
@@ -185,9 +187,11 @@ async function main(): Promise<void> {
       if (!uses.length) console.log('No secret has been used yet.');
       for (const { receipt: r } of uses) {
         const what = r.secrets.map((s) => s.name).join(', ');
-        const result = r.outcome === 'sent' ? `sent, HTTP ${String(r.status)}` : `${r.outcome.toUpperCase()}: ${r.reason ?? ''}`;
+        const local = r.method === 'RUN';
+        const result = r.outcome === 'sent' ? (local ? `exit code ${String(r.status)}` : `sent, HTTP ${String(r.status)}`) : `${r.outcome.toUpperCase()}: ${r.reason ?? ''}`;
         const echoes = r.echoesRedacted ? `, ${String(r.echoesRedacted)} echo(es) blanked` : '';
-        console.log(`${r.at.slice(0, 19).replace('T', ' ')}  ${r.client}  ${what}  ${r.method} ${r.host}${r.path}  ${result}${echoes}`);
+        const where = local ? `ran ${r.path} on this PC` : `${r.method} ${r.host}${r.path}`;
+        console.log(`${r.at.slice(0, 19).replace('T', ' ')}  ${r.client}  ${what}  ${where}  ${result}${echoes}`);
       }
       return;
     }
@@ -213,6 +217,33 @@ async function main(): Promise<void> {
         ok = ok && match;
       }
       process.exitCode = ok ? 0 : 1;
+      return;
+    }
+    case 'run': {
+      // npm run vault -- run --env STORE_PASSWORD=keystore_password --file KEYSTORE=play_upload_keystore -- gradlew.bat bundleRelease
+      const cut = rest.indexOf('--');
+      const own = parse(cut === -1 ? rest : rest.slice(0, cut));
+      const [command, ...args] = cut === -1 ? [] : rest.slice(cut + 1);
+      if (!command) throw new Error('Usage: npm run vault -- run [--env VAR=secret]... [--file VAR=secret]... -- <command> [args...]');
+      const pairs = (key: string) =>
+        Object.fromEntries(
+          (own.flags.get(key) ?? []).map((p) => {
+            const at = p.indexOf('=');
+            if (at < 1) throw new Error(`--${key} wants VAR=secret_name, not "${p}".`);
+            return [p.slice(0, at), p.slice(at + 1)];
+          }),
+        );
+      const v = await unlock();
+      // Ctrl+C reaches the tool too. Wait for it to stop so the temporary files are wiped.
+      process.on('SIGINT', () => undefined);
+      try {
+        const r = await runWithSecrets(v, root, { command, args, env: pairs('env'), files: pairs('file'), cwd: process.cwd() });
+        if (r.outcome !== 'sent') console.error(`${r.outcome === 'refused' ? 'Refused' : 'Failed'}: ${r.reason ?? ''}`);
+        console.error(`Receipt #${String(r.seq)}. ${r.tempDir ? 'The temporary key files were wiped.' : ''}`.trim());
+        process.exitCode = r.outcome === 'sent' ? (r.code ?? 1) : 1;
+      } finally {
+        closeVault(v);
+      }
       return;
     }
     case 'token': {
@@ -243,7 +274,7 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      console.log('npm run vault -- init | add <name> --host <host> [--in header,url,body] [--file <path>] | list | remove <name> | export <name> <path> | receipts | verify | serve | token');
+      console.log('npm run vault -- init | add <name> --host <host> [--in header,url,body] [--file <path>] | list | remove <name> | export <name> <path> | receipts | verify | run --env VAR=name --file VAR=name -- <command> | serve | token');
   }
 }
 

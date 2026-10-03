@@ -24,6 +24,11 @@ import type { Chunk, DisclosureReceipt, LedgerEntry, Placement, SecretUseReceipt
 import { signDisclosure, signSecretUse } from './ledger.ts';
 import { type OpenVault, storeDisclosure, unwrapPrivateKey } from './vault.ts';
 import { canonical, scrub } from './crypto.ts';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { allSecretValues, findSecret, PLACEHOLDER, redactSecrets, revealSecret } from './secrets.ts';
 
 export interface GateConfig {
@@ -440,4 +445,199 @@ export async function forwardWithSecrets(v: OpenVault, root: string, client: str
   // 5. receipt
   const r = await receiptFor(res ? 'sent' : 'error', res ? res.status : null, handed, echoes, res ? undefined : failure);
   return { outcome: res ? 'sent' : 'error', status: res ? res.status : null, handed, ...(res ? {} : { reason: failure }), ...r };
+}
+
+// ---------------------------------------------------------------------------
+// The owner's own tools. Some secrets are not sent over HTTPS but handed to a
+// program on this machine: a Gradle release build needs the upload keystore
+// file and its passwords. runWithSecrets() gives them to one process, for as
+// long as it runs, then takes them away:
+//
+//   1. env      text secrets become environment variables of that process only
+//   2. file     file secrets are written to a fresh private folder, and the
+//               variable holds the path. The folder is wiped when the tool exits.
+//   3. scrub    the tool's output is scrubbed of every vault secret, line by line
+//   4. receipt  signed and chained, like any other use, with no value in it
+//
+// Only the owner's command line calls this, after the passphrase. It is never
+// offered to an agent over MCP: an agent that could choose the command could
+// simply choose one that prints the secret.
+// ---------------------------------------------------------------------------
+
+export interface RunRequest {
+  command: string;
+  args: string[];
+  /** environment variable -> text secret name */
+  env?: Record<string, string>;
+  /** environment variable -> secret name; the variable is set to the path of a temporary copy */
+  files?: Record<string, string>;
+  cwd?: string;
+}
+
+export interface RunOptions {
+  /** where scrubbed output goes; defaults to this process's own stdout and stderr */
+  out?: (text: string) => void;
+  err?: (text: string) => void;
+  /** who asked, for the receipt */
+  client?: string;
+}
+
+export interface RunResult {
+  code: number | null;
+  outcome: 'sent' | 'refused' | 'error';
+  reason?: string;
+  /** the folder the file secrets were written to, already wiped */
+  tempDir: string | null;
+  receipt: SecretUseReceipt;
+  seq: number;
+}
+
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+
+export async function runWithSecrets(v: OpenVault, root: string, req: RunRequest, opts: RunOptions = {}): Promise<RunResult> {
+  const out = opts.out ?? ((t: string) => void process.stdout.write(t));
+  const err = opts.err ?? ((t: string) => void process.stderr.write(t));
+  const env = req.env ?? {};
+  const files = req.files ?? {};
+  const template = canonical({ command: req.command, args: req.args, env, files, cwd: req.cwd ?? null });
+  const uses = new Map<string, Set<Placement>>();
+  for (const name of Object.values(env)) uses.set(name, (uses.get(name) ?? new Set<Placement>()).add('env'));
+  for (const name of Object.values(files)) uses.set(name, (uses.get(name) ?? new Set<Placement>()).add('file'));
+  const metas = new Map([...uses.keys()].map((n) => [n, findSecret(v, n)]));
+  const hash = createHash('sha256');
+  let handedBytes = 0;
+  let echoes = 0;
+
+  const receiptFor = async (outcome: SecretUseReceipt['outcome'], status: number | null, reason?: string) => {
+    const receipt: SecretUseReceipt = {
+      version: 1,
+      kind: 'noai.secret-use',
+      statement:
+        outcome === 'refused'
+          ? 'The owner asked this device to hand the named vault secrets to a local program. It was refused and nothing was handed over.'
+          : 'This device handed the named vault secrets to one local program for as long as it ran, then removed them. The secret values are not in this receipt.',
+      receiptId: newId(),
+      at: new Date().toISOString(),
+      client: opts.client ?? 'owner-cli',
+      secrets: [...uses].map(([name, where]) => ({ id: metas.get(name)?.id ?? null, name, placements: [...where].sort() })),
+      method: 'RUN',
+      host: 'local',
+      path: basename(req.command),
+      requestHash: sha256(template),
+      requestBytes: Buffer.byteLength(template, 'utf8'),
+      outcome,
+      status,
+      ...(reason ? { reason } : {}),
+      // what the owner was shown: the tool's output after scrubbing
+      responseHash: hash.copy().digest('hex'),
+      responseBytes: handedBytes,
+      echoesRedacted: echoes,
+      signer: v.data.device.publicKey,
+    };
+    const pk = unwrapPrivateKey(v);
+    const signed = signSecretUse(receipt, pk);
+    scrub(pk);
+    const entry = await append(root, signed);
+    return { receipt, seq: entry.seq };
+  };
+
+  const refuse = async (reason: string): Promise<RunResult> => ({ code: null, outcome: 'refused', reason, tempDir: null, ...(await receiptFor('refused', null, reason)) });
+
+  if (!uses.size) return refuse('The command names no vault secret. Run it directly instead.');
+  for (const variable of [...Object.keys(env), ...Object.keys(files)]) if (!ENV_NAME.test(variable)) return refuse(`${variable} is not a usable environment variable name.`);
+  const clash = Object.keys(env).find((k) => k in files);
+  if (clash) return refuse(`${clash} is given both a value and a file.`);
+  for (const [name, where] of uses) {
+    const meta = metas.get(name);
+    if (!meta) return refuse(`There is no secret named ${name} in the vault.`);
+    if (where.has('env') && meta.kind === 'file') return refuse(`${name} is a file. Give it with --file, not --env.`);
+  }
+
+  // 1 and 2. The values exist outside the vault only in this child's environment and
+  // in one file inside a folder made for this run.
+  const childEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
+  let tempDir: string | null = null;
+  const buffers: Buffer[] = [];
+  const written: { path: string; bytes: number }[] = [];
+  try {
+    for (const [variable, name] of Object.entries(env)) {
+      const b = revealSecret(v, name) as Buffer;
+      buffers.push(b);
+      childEnv[variable] = b.toString('utf8');
+    }
+    if (Object.keys(files).length) {
+      tempDir = await mkdtemp(join(tmpdir(), 'noai-run-'));
+      for (const [variable, name] of Object.entries(files)) {
+        const b = revealSecret(v, name) as Buffer;
+        buffers.push(b);
+        const p = join(tempDir, `${name}${metas.get(name)?.fileName ? `-${metas.get(name)?.fileName}` : ''}`);
+        await writeFile(p, b, { mode: 0o600, flag: 'wx' });
+        written.push({ path: p, bytes: b.length });
+        childEnv[variable] = p;
+      }
+    }
+  } catch (e) {
+    for (const b of buffers) scrub(b);
+    if (tempDir) await rm(tempDir, { recursive: true, force: true });
+    return refuse(`The secrets could not be prepared: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // 3. run, with output scrubbed a line at a time so a secret is never split across two writes unseen
+  const all = allSecretValues(v);
+  const pipe = (write: (t: string) => void) => {
+    let pending = '';
+    const emit = (t: string) => {
+      const r = redactSecrets(t, all);
+      echoes += r.count;
+      hash.update(r.text);
+      handedBytes += Buffer.byteLength(r.text, 'utf8');
+      write(r.text);
+    };
+    return {
+      data: (chunk: Buffer) => {
+        pending += chunk.toString('utf8');
+        const cut = pending.lastIndexOf('\n');
+        if (cut === -1) return;
+        emit(pending.slice(0, cut + 1));
+        pending = pending.slice(cut + 1);
+      },
+      end: () => {
+        if (pending) emit(pending);
+        pending = '';
+      },
+    };
+  };
+  // %VAR% in an argument becomes the path of a file secret, for tools that take a path
+  // rather than reading the environment. Never a text secret: arguments are visible
+  // to every program on the machine that lists processes.
+  const args = req.args.map((a) => a.replace(/%([A-Za-z_][A-Za-z0-9_]*)%/g, (m, name: string) => (name in files ? (childEnv[name] as string) : m)));
+  const o = pipe(out);
+  const e2 = pipe(err);
+  // Windows only runs a .bat or .cmd file, gradlew.bat for one, through the shell.
+  const viaShell = process.platform === 'win32' && /\.(bat|cmd)$/i.test(req.command);
+  let code: number | null = null;
+  let failure = '';
+  try {
+    code = await new Promise<number | null>((done, fail) => {
+      const child = spawn(viaShell ? `"${req.command}"` : req.command, args, { env: childEnv, cwd: req.cwd, shell: viaShell, stdio: ['inherit', 'pipe', 'pipe'], windowsHide: true });
+      child.stdout.on('data', o.data);
+      child.stderr.on('data', e2.data);
+      child.on('error', fail);
+      child.on('close', (c) => done(c));
+    });
+  } catch (e) {
+    failure = redactSecrets(`${req.command} could not be started: ${e instanceof Error ? e.message : String(e)}`, all).text;
+  } finally {
+    o.end();
+    e2.end();
+    // 2, undone. Overwrite before deleting: best effort, since an SSD or a backup may keep old blocks.
+    for (const w of written) await writeFile(w.path, Buffer.alloc(w.bytes)).catch(() => undefined);
+    if (tempDir) await rm(tempDir, { recursive: true, force: true });
+    for (const b of buffers) scrub(b);
+    for (const s of all) scrub(s.value);
+  }
+
+  // 4. receipt
+  if (failure) return { code: null, outcome: 'error', reason: failure, tempDir, ...(await receiptFor('error', null, failure)) };
+  return { code, outcome: 'sent', tempDir, ...(await receiptFor('sent', code)) };
 }

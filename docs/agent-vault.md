@@ -106,6 +106,41 @@ Every receipt is signed by the expected key bf45d217e0f0aaa2.
 
 `verify` needs only `receipts.jsonl` and `ledger.jsonl`, with no vault, passphrase or network, so you can hand those two files to someone else to check. Use `--dir` to point it at a copy. It exits with code 1 if the chain is broken or signed by a different key.
 
+## 7. Sign an Android release without the key sitting on disk
+
+Some secrets go to a program on your PC rather than to a website. A release build needs the upload keystore and its passwords. `vault run` hands them to one program, for as long as that program runs:
+
+```powershell
+npm run vault -- add play_upload_keystore --file .\upload-keystore.jks --host local.invalid
+npm run vault -- add keystore_password --host local.invalid
+npm run vault -- run --file NOAI_KEYSTORE=play_upload_keystore --env NOAI_STORE_PASSWORD=keystore_password --env NOAI_KEY_PASSWORD=keystore_password -- .\gradlew.bat bundleRelease
+```
+
+- `--env VAR=name` puts a text secret in that program's environment, and nowhere else.
+- `--file VAR=name` writes the file to a new private folder under your Temp folder and puts its path in `VAR`. If an argument says `%VAR%`, NOAI swaps in that path. When the program ends, NOAI overwrites the file with zeros and deletes the folder, even if the program fails.
+- If the program prints a secret, the copy you see shows the placeholder instead.
+- Each run gets a signed receipt on the same chain: which secrets, which program, the exit code, and how many printed copies were blanked.
+- `--host local.invalid` is a placeholder host. A secret kept only for local programs then cannot go to any real website.
+
+Gradle reads the values from the environment. In the app's `build.gradle`, the release signing block becomes:
+
+```groovy
+release {
+    storeFile file(System.getenv("NOAI_KEYSTORE"))
+    storePassword System.getenv("NOAI_STORE_PASSWORD")
+    keyAlias "upload"
+    keyPassword System.getenv("NOAI_KEY_PASSWORD")
+}
+```
+
+This was tested on 3 Oct 2026 with Java's own `keytool`, a throwaway test keystore and a test password. keytool opened the keystore through the vault, the temporary folder was gone afterwards, and the password never appeared on screen or on disk:
+
+```powershell
+npm run vault -- run --env STORE_PASSWORD=keystore_password --file KEYSTORE=play_upload_keystore -- keytool -list -keystore %KEYSTORE% -storepass:env STORE_PASSWORD
+```
+
+`vault run` asks for your passphrase every time and is never offered to an agent. An agent that could choose the program could simply choose one that prints the key.
+
 ## The three MCP tools
 
 | Tool | What it does | Returns a value? |
@@ -124,5 +159,6 @@ Every receipt is signed by the expected key bf45d217e0f0aaa2.
 - **Redirects are not followed**, so a secret is never carried to a second host. The agent sees the 3xx response and can decide what to do next.
 - **A receipt is a signed statement by your device.** It proves what your device sent and refused, and that nothing was edited or removed afterwards. It cannot prove what the remote API did with the request.
 - **Memory.** After each request, NOAI wipes the buffers that held the value. Text strings made from the value cannot be wiped in JavaScript, and stay in the server's memory until it is reused.
-- **Files** are only used inside HTTPS requests, as base64. NOAI does not yet hand a keystore to a local tool such as Gradle.
+- **A program you run with `vault run` gets the real values.** NOAI controls which program, for how long, and what you see printed. It cannot control what that program does with the values. Only run tools you trust, such as Gradle, keytool and apksigner.
+- **The temporary keystore file is overwritten and deleted after the run.** An SSD, a backup or an antivirus scan may still keep an old copy of the blocks on disk.
 - **No independent security review yet.**

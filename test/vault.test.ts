@@ -11,12 +11,13 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { after, describe, it } from 'node:test';
 import { ask } from '../src/agent.ts';
-import { type ForwardTransport, forwardWithSecrets, type GateConfig, type Transport } from '../src/gate.ts';
+import { type ForwardTransport, forwardWithSecrets, type GateConfig, runWithSecrets, type Transport } from '../src/gate.ts';
 import { readLedger, readReceipts, receiptsPath, signersOf, verifyLedger } from '../src/ledger.ts';
 import { createMcpServer } from '../src/mcp-serve.ts';
+import { toolsFor } from '../src/mcp.ts';
 import { addSecret, findSecret, listSecrets, mcpToken, redactSecrets, removeSecret, revealSecret } from '../src/secrets.ts';
 import type { SignedReceipt, SignedSecretUse } from '../src/types.ts';
 import { addNote, createVault, type OpenVault, signerFingerprint } from '../src/vault.ts';
@@ -427,5 +428,81 @@ describe('V7 structure', () => {
       const code = readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
       assert.ok(!/console\.(log|error|warn|info|debug)/.test(code), `${f} writes to the console`);
     }
+  });
+});
+
+describe('V8 local tools: the owner hands a key to one program for one run', () => {
+  const NODE = process.execPath;
+  async function run(v: OpenVault, root: string, args: string[], env: Record<string, string> = {}, files: Record<string, string> = {}) {
+    const seen: string[] = [];
+    const r = await runWithSecrets(v, root, { command: NODE, args, env, files }, { out: (t) => seen.push(t), err: (t) => seen.push(t) });
+    return { ...r, output: seen.join('') };
+  }
+
+  it('V8.1 the program gets the password in its environment; its own output shows only the placeholder', async () => {
+    const { root, v } = await vault();
+    await addSecret(v, { name: 'keystore_password', value: Buffer.from(STORE_PASS), hosts: ['signing.example.test'] });
+    const r = await run(v, root, ['-e', `console.log('pw', process.env.STORE_PASSWORD); process.exit(process.env.STORE_PASSWORD === '${STORE_PASS}' ? 7 : 3)`], { STORE_PASSWORD: 'keystore_password' });
+    assert.equal(r.outcome, 'sent');
+    assert.equal(r.code, 7, 'the program received the real value');
+    assert.match(r.output, /pw \{\{secret:keystore_password\}\}/);
+    assertNoSecret(r.output, STORE_PASS);
+    assert.equal(r.receipt.method, 'RUN');
+    assert.equal(r.receipt.host, 'local');
+    assert.equal(r.receipt.status, 7);
+    assert.equal(r.receipt.echoesRedacted, 1);
+    assert.deepEqual(r.receipt.secrets.map((s) => [s.name, s.placements]), [['keystore_password', ['env']]]);
+  });
+
+  it('V8.2 a keystore file exists only while the program runs, byte for byte, and %VAR% gives tools its path', async () => {
+    const { root, v } = await vault();
+    const check = `const fs=require('fs');const p=process.argv[1];console.log('at',p);process.exit(p===process.env.KS&&fs.readFileSync(p).toString('base64')==='${JKS.toString('base64')}'?7:3)`;
+    const r = await run(v, root, ['-e', check, '%KS%'], {}, { KS: 'upload_keystore' });
+    assert.equal(r.code, 7, 'the program read the exact keystore at the path it was given');
+    assert.ok(r.tempDir);
+    assert.equal(existsSync(r.tempDir as string), false, 'the temporary folder is gone after the run');
+    assert.deepEqual(r.receipt.secrets.map((s) => [s.name, s.placements]), [['upload_keystore', ['file']]]);
+  });
+
+  it('V8.3 refuses an unknown secret, a file as an environment value, a bad variable name and a run with no secret, and receipts each', async () => {
+    const { root, v } = await vault();
+    for (const [env, files, why] of [
+      [{ P: 'nope' }, {}, /no secret named nope/],
+      [{ P: 'upload_keystore' }, {}, /is a file/],
+      [{ 'BAD-NAME': 'github_token' }, {}, /not a usable environment variable/],
+      [{}, {}, /names no vault secret/],
+      [{ X: 'github_token' }, { X: 'upload_keystore' }, /both a value and a file/],
+    ] as [Record<string, string>, Record<string, string>, RegExp][]) {
+      const r = await run(v, root, ['-e', 'process.exit(0)'], env, files);
+      assert.equal(r.outcome, 'refused');
+      assert.match(r.reason ?? '', why);
+      assert.equal(r.receipt.outcome, 'refused');
+    }
+    assert.equal(verifyLedger(await readLedger(root), await readReceipts<SignedReceipt>(root)).valid, true);
+  });
+
+  it('V8.4 a program that cannot start still wipes the files and leaves an error receipt', async () => {
+    const { root, v } = await vault();
+    const r = await runWithSecrets(v, root, { command: join(root, 'no-such-tool.exe'), args: [], files: { KS: 'upload_keystore' } }, { out: () => undefined, err: () => undefined });
+    assert.equal(r.outcome, 'error');
+    assert.equal(existsSync(r.tempDir as string), false);
+    assert.equal(r.receipt.outcome, 'error');
+  });
+
+  it('V8.5 no value or encoding of one lands in the receipts, the ledger or the vault file', async () => {
+    const { root, v } = await vault();
+    await run(v, root, ['-e', `console.log(process.env.T, Buffer.from(process.env.T).toString('base64'))`], { T: 'github_token' });
+    assertNoSecret((await everything(root)).text, GH);
+  });
+
+  it('V8.6 running a local program is never offered to an agent, and only gate.ts may start one', () => {
+    for (const set of ['notes', 'vault', 'all'] as const) {
+      assert.ok(!toolsFor(set).some((t) => /run|exec|shell|command/i.test(t.name)), `${set} offers a way to run a program`);
+    }
+    const src = new URL('../src/', import.meta.url);
+    const spawners = readdirSync(src)
+      .filter((f) => f.endsWith('.ts'))
+      .filter((f) => /node:child_process|\bchild_process\b/.test(readFileSync(new URL(f, src), 'utf8')));
+    assert.deepEqual(spawners, ['gate.ts']);
   });
 });

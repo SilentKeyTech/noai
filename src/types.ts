@@ -107,8 +107,12 @@ export interface SignedDisclosure {
   signature: string;
 }
 
-/** Where in a request a secret may be inserted. */
-export type Placement = 'header' | 'url' | 'body';
+/**
+ * Where a secret may be inserted: header, url or body of an agent's request
+ * (the owner allows these per secret), or env and file for a local tool the
+ * owner runs themselves with `vault run` (never offered to an agent).
+ */
+export type Placement = 'header' | 'url' | 'body' | 'env' | 'file';
 
 /**
  * What the gate attests to every time an agent's request names a vault secret,
