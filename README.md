@@ -147,7 +147,7 @@ npm run vault -- receipts
 npm run vault -- verify --expect <device key>
 ```
 
-Five-minute setup for Claude Code on Windows: [docs/agent-vault.md](docs/agent-vault.md).
+Five-minute setup for Claude Code on Windows: [docs/agent-vault.md](docs/agent-vault.md) (in Arabic: [docs/agent-vault.ar.md](docs/agent-vault.ar.md)). Release signing without the keystore sitting on disk: `npm run vault -- run --file KEYSTORE=... --env STORE_PASSWORD=... -- .\gradlew.bat bundleRelease`, see step 7 of the guide.
 
 **First use: Silent Key's own release keys.** Silent Key Technologies signs its Android apps with a Play upload keystore and uses API tokens for GitHub and the Play Developer API. The plan is for those to live in the agent vault, so the agents that help with releases call the APIs by placeholder and never read the keys. The tests rehearse that setup with test values only: a stand-in `.jks`, a GitHub token and a Play access token. No real Silent Key key has been imported.
 

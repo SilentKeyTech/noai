@@ -1,5 +1,7 @@
 # Agent vault: connect Claude Code in five minutes (Windows)
 
+_Arabic version: [agent-vault.ar.md](agent-vault.ar.md)_
+
 The agent vault holds your API keys and small credential files, such as an Android upload keystore. Claude Code (or any MCP client) can use them, but never sees them:
 
 1. The agent writes a placeholder such as `{{secret:github_token}}` where the key belongs.
