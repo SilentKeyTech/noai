@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  NOAI for Windows, Microsoft Store package. Identity values are the ones
+  Partner Center assigned to product 9P7HDN9XV24C (reserved 3 Oct 2026).
+  packaging/msix/build.ts fills in the version.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap5 desktop4 rescap">
+
+  <Identity
+    Name="SilentKeyTechnologies.NOAI"
+    Publisher="CN=62D53042-5918-4D57-872E-F0AF2EF926FA"
+    Version="{{VERSION}}"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>NOAI</DisplayName>
+    <PublisherDisplayName>Silent Key Technologies</PublisherDisplayName>
+    <Logo>assets\StoreLogo.png</Logo>
+    <Description>A local vault your AI agents can use without seeing your secrets. Agents write a placeholder; NOAI inserts the real key as the request leaves this PC, only for sites you allowed, and signs a receipt for every use.</Description>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="NOAI" Executable="noai-vault.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="NOAI"
+        Description="Start the NOAI agent vault"
+        BackgroundColor="transparent"
+        Square150x150Logo="assets\Square150x150Logo.png"
+        Square44x44Logo="assets\Square44x44Logo.png" />
+      <Extensions>
+        <!-- Lets a terminal run: noai-vault add, noai-vault receipts, noai-vault verify ... -->
+        <uap5:Extension Category="windows.appExecutionAlias" Executable="noai-vault.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias desktop4:Subsystem="console">
+            <uap5:ExecutionAlias Alias="noai-vault.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
