@@ -13,7 +13,7 @@
 import { newId, sha256 } from './crypto.ts';
 import { append } from './ledger.ts';
 import { DEFAULT_MODEL, FAST_MODEL, prepareDisclosure, requestBody, stripThinking } from './prompt.ts';
-import { type RedactOptions, rehydrate } from './redact.ts';
+import { type RedactOptions, redactAll, rehydrate } from './redact.ts';
 
 export { buildPrompt, DEFAULT_MODEL, FAST_MODEL, stripThinking } from './prompt.ts';
 import type { Chunk, DisclosureReceipt, LedgerEntry, SignedDisclosure } from './types.ts';
@@ -81,6 +81,205 @@ class Unanswered extends Error {
     super(message);
     this.outcome = outcome;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Company gateway. An OpenAI-compatible chat call, redacted on this machine
+// before it is forwarded. Same order as disclose(): redact, budget, hash, send,
+// receipt, rehydrate. Kept apart from disclose() so branches that extend this
+// file at its end do not collide with it.
+// ---------------------------------------------------------------------------
+
+export interface GatewayConfig {
+  root: string;
+  /** any OpenAI-compatible base URL, Nebius Token Factory by default */
+  baseUrl: string;
+  apiKey: string;
+  /** used only when the client names no model */
+  model: string;
+  /** ceiling on the forwarded body in bytes; chat history is bigger than one question */
+  maxPayloadBytes: number;
+  timeoutMs: number;
+}
+
+export function gatewayConfigFromEnv(root: string): GatewayConfig {
+  const base = configFromEnv(root);
+  return {
+    root,
+    baseUrl: process.env.NOAI_GATEWAY_UPSTREAM ?? base.baseUrl,
+    apiKey: process.env.NOAI_GATEWAY_KEY ?? base.apiKey,
+    model: base.model,
+    maxPayloadBytes: Number(process.env.NOAI_GATEWAY_MAX_PAYLOAD ?? 200_000),
+    timeoutMs: Number(process.env.NOAI_GATEWAY_TIMEOUT_MS ?? 120_000),
+  };
+}
+
+/** A request the gateway will not forward, with the HTTP status to answer with. Nothing was sent. */
+export class GatewayError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const GATEWAY_SYSTEM = 'Values like [EMAIL_1], [PHONE_1] or [PERSON_1] are placeholders for private data hidden on the company\'s own machine. Use them exactly as written, never guess what they stand for.';
+const GATEWAY_ROLES = new Set(['system', 'developer', 'user', 'assistant']);
+/** Settings that carry no private text. Anything else the client sends is dropped, not forwarded. */
+const GATEWAY_PARAMS = ['temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stop', 'n', 'seed', 'presence_penalty', 'frequency_penalty'] as const;
+/** Fields that can hold private text this gateway cannot redact. Refused, so nothing leaks past it. */
+const GATEWAY_REFUSED = ['tools', 'tool_choice', 'functions', 'function_call'] as const;
+
+export interface GatewayResult {
+  /** the provider's reply with placeholders put back, ready to return to the client */
+  response: Record<string, unknown>;
+  /** the exact redacted body that left the machine */
+  disclosed: string;
+  signed: SignedDisclosure;
+  entry: LedgerEntry;
+  model: string;
+  ms: number;
+}
+
+// The vault file and the ledger have one writer at a time.
+let gatewayQueue: Promise<unknown> = Promise.resolve();
+function gatewaySerial<T>(fn: () => Promise<T>): Promise<T> {
+  const run = gatewayQueue.then(fn, fn);
+  gatewayQueue = run.catch(() => undefined);
+  return run;
+}
+
+/** Redact every message with one placeholder space and build the body that will leave. */
+function gatewayBody(req: Record<string, unknown>, cfg: GatewayConfig, known: RedactOptions): { body: string; model: string; counts: Record<string, number>; map: Map<string, string> } {
+  for (const k of GATEWAY_REFUSED) {
+    if (req[k] !== undefined) throw new GatewayError(`"${k}" is not supported by the NOAI gateway: tool calls can carry private data it cannot hide. Nothing was sent.`, 400);
+  }
+  const messages = req.messages;
+  if (!Array.isArray(messages) || messages.length === 0) throw new GatewayError('"messages" must be a non-empty array.', 400);
+
+  const texts: string[] = [];
+  const shapes = messages.map((m: unknown): { role: string; parts: number | null } => {
+    const msg = (m ?? {}) as { role?: unknown; content?: unknown };
+    if (typeof msg.role !== 'string' || !GATEWAY_ROLES.has(msg.role)) throw new GatewayError(`Message role "${String(msg.role)}" is not supported. Nothing was sent.`, 400);
+    if (typeof msg.content === 'string') {
+      texts.push(msg.content);
+      return { role: msg.role, parts: null };
+    }
+    if (Array.isArray(msg.content)) {
+      for (const p of msg.content as { type?: unknown; text?: unknown }[]) {
+        if (p?.type !== 'text' || typeof p.text !== 'string') throw new GatewayError('Only text can be sent. Images, audio and files cannot be hidden, so they are refused. Nothing was sent.', 400);
+        texts.push(p.text);
+      }
+      return { role: msg.role, parts: msg.content.length };
+    }
+    throw new GatewayError('Each message needs text "content". Nothing was sent.', 400);
+  });
+
+  const red = redactAll(texts, known);
+  let at = 0;
+  const out = shapes.map((s) => {
+    if (s.parts === null) return { role: s.role, content: red.texts[at++] ?? '' };
+    const parts = Array.from({ length: s.parts }, () => ({ type: 'text', text: red.texts[at++] ?? '' }));
+    return { role: s.role, content: parts };
+  });
+
+  const model = typeof req.model === 'string' && req.model ? req.model : cfg.model;
+  const params: Record<string, unknown> = {};
+  for (const k of GATEWAY_PARAMS) if (req[k] !== undefined) params[k] = req[k];
+  const body = JSON.stringify({ model, ...params, messages: [{ role: 'system', content: GATEWAY_SYSTEM }, ...out] });
+  return { body, model, counts: red.counts, map: red.map };
+}
+
+/**
+ * Forward one chat completion. `client` is the staff member the token belongs
+ * to; it goes on the receipt so the log says who, never the token.
+ */
+export async function forwardChat(
+  v: OpenVault,
+  cfg: GatewayConfig,
+  req: Record<string, unknown>,
+  client: string,
+  transport: Transport = httpTransport,
+  /** names to always hide, usually knownPeople(readNotes(v)) */
+  known: RedactOptions = {},
+): Promise<GatewayResult> {
+  const started = Date.now();
+  if (!cfg.apiKey) throw new GatewayError('The gateway has no upstream key (NOAI_GATEWAY_KEY or NEBIUS_API_KEY). Nothing was sent.', 503);
+  const { body, model, counts, map } = gatewayBody(req, cfg, known);
+  // 2. budget, checked before any byte leaves
+  const payloadBytes = Buffer.byteLength(body, 'utf8');
+  if (payloadBytes > cfg.maxPayloadBytes) {
+    throw new GatewayError(`Refused: ${String(payloadBytes)} bytes exceeds the ${String(cfg.maxPayloadBytes)} byte ceiling. Nothing was sent.`, 413);
+  }
+  const url = `${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`;
+
+  // 5. receipt, signed and chained, for every attempt that sent bytes
+  const receiptFor = (text: string, usage: DisclosureReceipt['usage'], outcome?: 'timeout' | 'error') =>
+    gatewaySerial(async () => {
+      const receipt: DisclosureReceipt = {
+        version: 1,
+        kind: 'noai.disclosure',
+        statement: 'This device sent exactly the payload whose hash is below, and nothing else, to the named model.',
+        receiptId: newId(),
+        at: new Date().toISOString(),
+        endpoint: new URL(url).host,
+        model,
+        payloadHash: sha256(body),
+        payloadBytes,
+        sources: [],
+        redactions: counts,
+        responseHash: sha256(text),
+        usage,
+        signer: v.data.device.publicKey,
+        client,
+        ...(outcome ? { outcome } : {}),
+      };
+      const pk = unwrapPrivateKey(v);
+      const signed = signDisclosure(receipt, pk);
+      scrub(pk);
+      const entry = await append(cfg.root, signed);
+      await storeDisclosure(v, receipt.receiptId, body);
+      return { signed, entry };
+    });
+
+  // 3. the hash above is of these exact bytes. 4. send
+  const controller = new AbortController();
+  const timer = cfg.timeoutMs ? setTimeout(() => controller.abort(), cfg.timeoutMs) : null;
+  let res: Awaited<ReturnType<Transport>>;
+  let text: string;
+  try {
+    res = await transport(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` }, body, signal: controller.signal });
+    text = await res.text();
+  } catch (e) {
+    const timedOut = controller.signal.aborted;
+    await receiptFor('', null, timedOut ? 'timeout' : 'error');
+    throw new GatewayError(timedOut ? `${model} did not answer within ${String(cfg.timeoutMs)} ms.` : `${model} could not be reached: ${e instanceof Error ? e.message : String(e)}`, timedOut ? 504 : 502);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  if (!res.ok) {
+    await receiptFor(text, null, 'error');
+    throw new GatewayError(`The provider returned ${String(res.status)}: ${text.slice(0, 300)}`, 502);
+  }
+  let json: Record<string, unknown>;
+  try {
+    json = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    await receiptFor(text, null, 'error');
+    throw new GatewayError('The provider returned something that is not JSON.', 502);
+  }
+  const u = json.usage as { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
+  const { signed, entry } = await receiptFor(text, u ? { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0 } : null);
+
+  // 6. rehydrate on this machine
+  for (const c of (Array.isArray(json.choices) ? json.choices : []) as { message?: Record<string, unknown> }[]) {
+    for (const k of ['content', 'reasoning_content']) {
+      const val = c.message?.[k];
+      if (c.message && typeof val === 'string') c.message[k] = rehydrate(val, map);
+    }
+  }
+  json.noai = { receiptId: signed.receipt.receiptId, seq: entry.seq, payloadHash: signed.receipt.payloadHash };
+  return { response: json, disclosed: body, signed, entry, model, ms: Date.now() - started };
 }
 
 export async function disclose(
