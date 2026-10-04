@@ -130,6 +130,34 @@ npx @modelcontextprotocol/inspector --cli http://127.0.0.1:7792/mcp --transport 
 
 The server listens on 127.0.0.1 by default and every request needs the bearer token. An `Origin` header is refused unless listed in `NOAI_MCP_ALLOWED_ORIGINS`. To reach it from a hosted assistant, put it behind an HTTPS tunnel you control (`NOAI_MCP_HOST`, `NOAI_MCP_PORT`); the vault, the keys and the ledger stay on your machine.
 
+## Company gateway
+
+A company's staff keep using the AI tool they already use. The tool points at NOAI instead of the AI provider. NOAI hides private data on the company's own machine, forwards the call, signs a receipt, and puts the real values back in the answer.
+
+It is an OpenAI-compatible endpoint (`POST /v1/chat/completions`, `GET /v1/models`), so anything that lets you set a base URL works: Open WebUI, LibreChat, Continue, scripts, the OpenAI SDKs.
+
+```bash
+export NOAI_PASSPHRASE='your passphrase'
+export NOAI_GATEWAY_TOKENS="amal:$(node -e "console.log(crypto.randomBytes(24).toString('base64url'))"),omar:..."
+export NEBIUS_API_KEY=...        # or NOAI_GATEWAY_KEY, with NOAI_GATEWAY_UPSTREAM for another OpenAI-compatible provider
+npm run gateway                  # http://127.0.0.1:7794/v1
+```
+
+Each staff member gets their own token (24 characters or more) and uses it as the API key. Every receipt names who made the call, never the token. The gateway listens on 127.0.0.1 unless `NOAI_GATEWAY_HOST` and `NOAI_GATEWAY_PORT` say otherwise; an `Origin` header is refused unless listed in `NOAI_GATEWAY_ALLOWED_ORIGINS`. Other settings: `NOAI_GATEWAY_MODELS` (extra model ids to list), `NOAI_GATEWAY_MAX_PAYLOAD` (bytes, default 200000), `NOAI_GATEWAY_TIMEOUT_MS`.
+
+What it does to every call, in this order: hide private values in every message (one placeholder space per request, plus every person the vault names), refuse anything over the byte ceiling, hash the exact body, send it, sign and chain a receipt (the redacted body is kept sealed in the vault), put the real values back in the reply.
+
+Limits, stated plainly:
+
+- The AI provider still sees the redacted text. Dates, amounts and free text that are not a recognised kind are sent as written. NOAI hides what it recognises; it does not make data anonymous and does not make a company compliant.
+- The ChatGPT and Copilot apps cannot be pointed at a different address, so they cannot use the gateway.
+- Text only. Images, audio, files, tool calls and function calls are refused, because they can carry private data the gateway cannot hide. Nothing is sent when it refuses.
+- Only settings that carry no text are forwarded (temperature, top_p, max_tokens, stop, n, seed, penalties). Anything else the client sends, such as `user` or `metadata`, is dropped.
+- A request for a stream is answered whole, then sent as one event, because putting real values back needs the full reply. Clients that ask to stream still work; they just do not see words arrive one by one.
+- Tokens are static secrets in an environment variable. There are no logins and no receipts page yet.
+
+Tests: `test/gateway.test.ts` (names, phones and IDs never reach the provider; the receipt hash equals the sha256 of the body sent; a bad token gets 401; refused requests send nothing; concurrent calls keep the chain valid).
+
 ## What is proven, and what is not
 
 Proven by the code and the tests:
@@ -144,6 +172,7 @@ Proven by the code and the tests:
 - Retrieval understands meaning, on device: "who is my doctor?" finds the note that says GP, which BM25 alone misses (test: `hybrid finds the GP for "doctor", and sends nothing from other notes`).
 - The embedding model is checked against a pinned SHA-256 before it runs, and refused if it does not match (test: `refuses a model file that does not match its pinned hash`).
 - Saving a memory sends nothing and writes no receipt (test: `saving a memory sends nothing, writes no ledger entry, and seals it`).
+- Through the company gateway, redacted values never appear in the body forwarded to the provider, and the receipt hash equals the sha256 of that body (tests: `test/gateway.test.ts`).
 - An MCP client receives the answer only, with private values still placeholders, and the handover is signed into the same chain as the model call (tests: `test/mcp.test.ts`).
 - When the model asks to remember something, it only ever saw placeholders. The real values are put back and sealed on device (test: `keeps what the model asks to remember, with the real values put back on device`).
 

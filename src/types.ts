@@ -89,6 +89,8 @@ export interface DisclosureReceipt {
   signer: string;
   /** set only when the bytes left but no answer came back: 'timeout' or 'error'. An unanswered disclosure is still a disclosure. */
   outcome?: 'timeout' | 'error';
+  /** set by the company gateway: which staff member's token made the call, never the token itself */
+  client?: string;
 }
 
 export interface SignedDisclosure {
