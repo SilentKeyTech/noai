@@ -154,7 +154,23 @@ Limits, stated plainly:
 - Text only. Images, audio, files, tool calls and function calls are refused, because they can carry private data the gateway cannot hide. Nothing is sent when it refuses.
 - Only settings that carry no text are forwarded (temperature, top_p, max_tokens, stop, n, seed, penalties). Anything else the client sends, such as `user` or `metadata`, is dropped.
 - A request for a stream is answered whole, then sent as one event, because putting real values back needs the full reply. Clients that ask to stream still work; they just do not see words arrive one by one.
-- Tokens are static secrets in an environment variable. There are no logins and no receipts page yet.
+- Tokens do not expire. Revoke a person and their token stops on their next call. There is no single sign-on, no email invite and no per-person spending limit yet.
+
+### People and the receipts page
+
+Add people on the machine that runs the gateway. A token is printed once and not stored; `staff.json` beside the vault holds only hashes.
+
+```bash
+export NOAI_ADMIN_PASSWORD='at least 12 characters'
+npm run staff -- add ramzi --admin     # may read the receipts page
+npm run staff -- add amal              # may use the gateway
+npm run staff -- list
+npm run staff -- revoke amal
+```
+
+The receipts page is `http://127.0.0.1:7794/admin`. An admin signs in with name and password and sees: whether the chain is intact (red and the entry number if anything was edited), calls, bytes and hidden values per person, and the latest 200 calls. "Read what was sent" shows the redacted text that left, never the real values. Admins can revoke people; nobody can revoke themselves. Five wrong passwords lock that name for five minutes. The session cookie is HttpOnly and SameSite=Strict, the page refuses any Host that is not the machine's own (DNS rebinding), and it puts server text on the screen as text only. A staff token cannot read receipts.
+
+Tests: `test/staff.test.ts`.
 
 Tests: `test/gateway.test.ts` (names, phones and IDs never reach the provider; the receipt hash equals the sha256 of the body sent; a bad token gets 401; refused requests send nothing; concurrent calls keep the chain valid).
 
