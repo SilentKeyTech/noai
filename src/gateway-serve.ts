@@ -15,21 +15,24 @@
  * Streaming is answered, not streamed: the reply is rehydrated whole, then
  * sent as one event, so a client that asks for a stream still works.
  */
-import { timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { forwardChat, type GatewayConfig, GatewayError, gatewayConfigFromEnv, httpTransport, type Transport } from './gate.ts';
 import { noaiHome } from './home.ts';
+import { readLedger, readReceipts, verifyLedger } from './ledger.ts';
 import { knownPeople } from './people.ts';
-import { type OpenVault, openVault, readNotes } from './vault.ts';
+import { authenticateToken, checkPassword, readStaff, revokeStaff } from './staff.ts';
+import { type OpenVault, openVault, readDisclosure, readNotes } from './vault.ts';
 
 const MAX_BODY = 1024 * 1024;
 
 export interface GatewayServerOptions {
   vault: OpenVault;
   cfg: GatewayConfig;
-  /** staff name -> secret */
-  tokens: Map<string, string>;
+  /** staff name -> secret, from the environment. Optional: people added with `npm run staff` are read from staff.json. */
+  tokens?: Map<string, string>;
   /** model ids listed at GET /v1/models; the default model is always included */
   models?: string[];
   /** Origins a browser page may call from. Requests with no Origin header are not from a page. */
@@ -97,16 +100,114 @@ function sendAsStream(res: ServerResponse, reply: Record<string, unknown>): void
   res.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`);
 }
 
+const SESSION_MS = 8 * 60 * 60 * 1000;
+const LOGIN_WINDOW_MS = 5 * 60 * 1000;
+const LOGIN_MAX_FAILS = 5;
+
 export function createGatewayServer(opts: GatewayServerOptions): Server {
   const allowedOrigins = opts.allowedOrigins ?? [];
   const transport = opts.transport ?? httpTransport;
   const models = [...new Set([opts.cfg.model, ...(opts.models ?? [])])];
+  const tokens = opts.tokens ?? new Map<string, string>();
+  const root = opts.cfg.root;
+  const sessions = new Map<string, { name: string; expires: number }>();
+  const fails = new Map<string, number[]>();
+
+  /** Hosts the receipts page may be reached at. Anything else is a DNS-rebinding attempt. */
+  const hostOk = (req: IncomingMessage): boolean => {
+    const host = req.headers.host ?? '';
+    const port = String(req.socket.localPort ?? '');
+    if ([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`].includes(host)) return true;
+    return allowedOrigins.some((o) => new URL(o).host === host);
+  };
+
+  const adminFrom = async (req: IncomingMessage): Promise<string | null> => {
+    const cookie = /(?:^|;\s*)noai_session=([\w-]+)/.exec(req.headers.cookie ?? '')?.[1];
+    const s = cookie ? sessions.get(cookie) : undefined;
+    if (s && s.expires > Date.now()) return s.name;
+    const t = await authenticateToken(root, req.headers.authorization);
+    return t?.role === 'admin' ? t.name : null;
+  };
+
+  const admin = async (req: IncomingMessage, res: ServerResponse, path: string): Promise<void> => {
+    if (!hostOk(req)) return fail(res, 403, 'Host not allowed.');
+    const origin = req.headers.origin;
+    if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) return fail(res, 403, 'Origin not allowed.');
+    const headers = { 'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", 'x-content-type-options': 'nosniff' };
+
+    if (path === '/admin' && req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...headers });
+      res.end(await readFile(new URL('../web/gateway-admin.html', import.meta.url)));
+      return;
+    }
+    if (path === '/admin/api/login' && req.method === 'POST') {
+      const raw = await readBody(req);
+      const b = raw === null ? null : (JSON.parse(raw) as { name?: unknown; password?: unknown });
+      if (!b || typeof b.name !== 'string' || typeof b.password !== 'string') return fail(res, 400, 'Name and password, please.');
+      const now = Date.now();
+      const recent = (fails.get(b.name) ?? []).filter((t) => now - t < LOGIN_WINDOW_MS);
+      if (recent.length >= LOGIN_MAX_FAILS) return fail(res, 429, 'Too many wrong passwords. Wait five minutes.');
+      if (!(await checkPassword(root, b.name, b.password))) {
+        fails.set(b.name, [...recent, now]);
+        return fail(res, 401, 'Wrong name or password.');
+      }
+      fails.delete(b.name);
+      const id = randomBytes(32).toString('base64url');
+      sessions.set(id, { name: b.name, expires: now + SESSION_MS });
+      return send(res, 200, { ok: true, name: b.name }, { 'set-cookie': `noai_session=${id}; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=${String(SESSION_MS / 1000)}` });
+    }
+    const name = await adminFrom(req);
+    if (!name) return fail(res, 401, 'Sign in first.');
+    if (path === '/admin/api/logout' && req.method === 'POST') {
+      const cookie = /(?:^|;\s*)noai_session=([\w-]+)/.exec(req.headers.cookie ?? '')?.[1];
+      if (cookie) sessions.delete(cookie);
+      return send(res, 200, { ok: true }, { 'set-cookie': 'noai_session=; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=0' });
+    }
+    if (path === '/admin/api/summary' && req.method === 'GET') {
+      const entries = await readLedger(root);
+      const receipts = await readReceipts(root);
+      const byId = new Map(receipts.map((r) => [r.receipt.receiptId, r.receipt]));
+      const perStaff: Record<string, { calls: number; bytes: number; failed: number; redactions: Record<string, number> }> = {};
+      for (const r of receipts) {
+        const k = r.receipt.client ?? '(not the gateway)';
+        const s = (perStaff[k] ??= { calls: 0, bytes: 0, failed: 0, redactions: {} });
+        s.calls++;
+        s.bytes += r.receipt.payloadBytes;
+        if (r.receipt.outcome) s.failed++;
+        for (const [kind, n] of Object.entries(r.receipt.redactions)) s.redactions[kind] = (s.redactions[kind] ?? 0) + n;
+      }
+      return send(res, 200, {
+        admin: name,
+        verdict: verifyLedger(entries, receipts),
+        perStaff,
+        staff: (await readStaff(root)).map((s) => ({ name: s.name, role: s.role, createdAt: s.createdAt, revokedAt: s.revokedAt ?? null })),
+        entries: entries.slice(-200).reverse().map((e) => {
+          const r = byId.get(e.receiptId);
+          return { seq: e.seq, receiptId: e.receiptId, at: e.at, model: e.model, bytes: e.payloadBytes, hash: e.payloadHash, client: r?.client ?? null, endpoint: r?.endpoint ?? null, redactions: r?.redactions ?? {}, outcome: r?.outcome ?? null };
+        }),
+      });
+    }
+    const body = /^\/admin\/api\/receipts\/([\w-]+)\/body$/.exec(path);
+    if (body && req.method === 'GET') {
+      const text = readDisclosure(opts.vault, body[1] ?? '');
+      return text === null ? fail(res, 404, 'No sealed copy of that receipt.') : send(res, 200, { body: text });
+    }
+    if (path === '/admin/api/revoke' && req.method === 'POST') {
+      const raw = await readBody(req);
+      const b = raw === null ? null : (JSON.parse(raw) as { name?: unknown });
+      if (!b || typeof b.name !== 'string') return fail(res, 400, 'Which person?');
+      if (b.name === name) return fail(res, 400, 'You cannot revoke yourself.');
+      return (await revokeStaff(root, b.name)) ? send(res, 200, { ok: true }) : fail(res, 404, 'No such active person.');
+    }
+    return fail(res, 404, 'Not found.');
+  };
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const path = (req.url ?? '').split('?')[0] ?? '';
+    if (path === '/admin' || path.startsWith('/admin/')) return admin(req, res, path);
     const origin = req.headers.origin;
     if (origin && !allowedOrigins.includes(origin)) return fail(res, 403, 'Origin not allowed.');
-    const client = who(req.headers.authorization, opts.tokens);
+    const client = who(req.headers.authorization, tokens) ?? (await authenticateToken(root, req.headers.authorization))?.name ?? null;
     if (!client) return fail(res, 401, 'Unauthorized.', { 'www-authenticate': 'Bearer realm="noai"' });
 
     if (path === '/v1/models') {
@@ -142,11 +243,12 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
 }
 
 async function main(): Promise<void> {
+  const root = noaiHome();
   const tokens = parseTokens(process.env.NOAI_GATEWAY_TOKENS ?? '');
-  if (tokens.size === 0) throw new Error('Set NOAI_GATEWAY_TOKENS to "name:secret,name:secret", one secret of at least 24 characters per staff member.');
+  const people = (await readStaff(root)).filter((s) => !s.revokedAt);
+  if (tokens.size === 0 && people.length === 0) throw new Error('Nobody can use the gateway yet. Add someone: npm run staff -- add <name> [--admin]');
   const passphrase = process.env.NOAI_PASSPHRASE;
   if (!passphrase) throw new Error('Set NOAI_PASSPHRASE to unlock the vault.');
-  const root = noaiHome();
   const vault = await openVault(root, passphrase);
   const cfg = gatewayConfigFromEnv(root);
   const list = (name: string): string[] => (process.env[name] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -154,7 +256,8 @@ async function main(): Promise<void> {
   const port = Number(process.env.NOAI_GATEWAY_PORT ?? 7794);
   createGatewayServer({ vault, cfg, tokens, models: list('NOAI_GATEWAY_MODELS'), allowedOrigins: list('NOAI_GATEWAY_ALLOWED_ORIGINS') }).listen(port, host, () => {
     console.log(`NOAI gateway on http://${host}:${String(port)}/v1  (data in ${root})`);
-    console.log(`Forwarding to ${new URL(cfg.baseUrl).host} for ${String(tokens.size)} staff token(s): ${[...tokens.keys()].join(', ')}`);
+    console.log(`Forwarding to ${new URL(cfg.baseUrl).host} for ${String(tokens.size + people.length)} person(s): ${[...tokens.keys(), ...people.map((p) => p.name)].join(', ')}`);
+    console.log(`Receipts page: http://${host}:${String(port)}/admin${people.some((p) => p.role === 'admin') ? '' : '   (no admin yet: npm run staff -- add <name> --admin)'}`);
     if (!cfg.apiKey) console.log('Warning: no upstream key set. Every call will be refused until NOAI_GATEWAY_KEY or NEBIUS_API_KEY is set.');
   });
 }
