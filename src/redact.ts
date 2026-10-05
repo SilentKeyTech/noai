@@ -427,3 +427,31 @@ export function redact(text: string, opts: RedactOptions = {}): Redaction {
 export function rehydrate(text: string, map: Map<string, string>): string {
   return text.replace(/\[[A-Z]+_\d+\]/g, (ph) => map.get(ph) ?? ph);
 }
+
+/**
+ * Rehydrate a reply that arrives in pieces. A placeholder can be cut across two
+ * pieces ("[EMAI" then "L_1]"), so anything after the last "[" that could still
+ * become a placeholder is held back until the next piece or the end.
+ */
+export class StreamRehydrator {
+  private held = '';
+  private readonly map: Map<string, string>;
+  constructor(map: Map<string, string>) {
+    this.map = map;
+  }
+
+  push(piece: string): string {
+    const text = this.held + piece;
+    const open = text.lastIndexOf('[');
+    const cut = open >= 0 && text.length - open <= 24 && /^\[[A-Z]*(?:_\d*)?$/.test(text.slice(open)) ? open : text.length;
+    this.held = text.slice(cut);
+    return rehydrate(text.slice(0, cut), this.map);
+  }
+
+  /** The end of the reply: whatever was held is plain text after all. */
+  flush(): string {
+    const rest = this.held;
+    this.held = '';
+    return rehydrate(rest, this.map);
+  }
+}
