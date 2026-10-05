@@ -120,7 +120,7 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
     if (!hostOk(req)) return fail(res, 403, 'Host not allowed.');
     const origin = req.headers.origin;
     if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) return fail(res, 403, 'Origin not allowed.');
-    const headers = { 'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", 'x-content-type-options': 'nosniff' };
+    const headers = { 'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", 'x-content-type-options': 'nosniff' };
 
     if (path === '/admin' && req.method === 'GET') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...headers });
@@ -192,9 +192,16 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const path = (req.url ?? '').split('?')[0] ?? '';
     if (path === '/admin' || path.startsWith('/admin/')) return admin(req, res, path);
+    const asset = path === '/gateway-themes.css' ? ['text/css', 'gateway-themes.css'] : path === '/gateway-themes.js' ? ['text/javascript', 'gateway-themes.js'] : null;
+    if (asset && req.method === 'GET') {
+      if (!hostOk(req)) return fail(res, 403, 'Host not allowed.');
+      res.writeHead(200, { 'content-type': asset[0] + '; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+      res.end(await readFile(new URL('../web/' + asset[1], import.meta.url)));
+      return;
+    }
     if (path === '/chat' && req.method === 'GET') {
       if (!hostOk(req)) return fail(res, 403, 'Host not allowed.');
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", 'x-content-type-options': 'nosniff' });
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", 'x-content-type-options': 'nosniff' });
       res.end(await readFile(new URL('../web/gateway-chat.html', import.meta.url)));
       return;
     }
