@@ -2,6 +2,7 @@
  * One turn in the browser: a memory to keep on device, a skill, or a question
  * answered through the gate. Mirrors src/agent.ts, using the same shared core.
  */
+import { CHECKIN_KIND, answerCheckin, checkinIntent, checkinQuestion } from './core/checkins.js';
 import { MEMORY_TITLE, minimalSet, rememberIntent, splitMemories } from './core/memory.js';
 import { knownPeople } from './core/people.js';
 import { Bm25Retriever, HybridRetriever } from './core/retrieve.js';
@@ -31,8 +32,21 @@ export async function ask(v, cfg, question, { embedder = null, transport = httpT
   return { ...result, answer, used: chosen.length, retriever: embedder ? 'hybrid' : 'bm25', remembered, reminders, skill: skill?.id ?? null };
 }
 
+/** A check-in is sealed with its time. Like a memory, it never calls the model. */
+export async function checkIn(v, who, what) {
+  return { kind: 'checkin', note: await addNote(v, who.trim(), what.replace(/\s+/g, ' ').trim(), CHECKIN_KIND), bytesSent: 0 };
+}
+
 export async function respond(v, cfg, text, opts = {}) {
   const fact = rememberIntent(text);
   if (fact) return remember(v, fact);
+  const said = checkinIntent(text);
+  if (said) return checkIn(v, said.who, said.what);
+  // A question about check-ins is answered here, from the sealed check-ins, and sends nothing.
+  const q = checkinQuestion(text);
+  if (q) {
+    const a = answerCheckin(q, await readNotes(v), opts.now ?? new Date());
+    if (a) return { kind: 'checkin-answer', answer: a.text, found: a.found, bytesSent: 0 };
+  }
   return { kind: 'answer', ...(await ask(v, cfg, text, { ...opts, skill: detectSkill(text) })) };
 }
