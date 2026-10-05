@@ -1,5 +1,6 @@
 /** The browser demo's UI. All the work is in lib/; this file only draws it. */
-import { respond } from './lib/agent.js';
+import { checkIn, respond } from './lib/agent.js';
+import { CHECKIN_KIND, routines, whenSaid } from './lib/core/checkins.js';
 import { SKILLS } from './lib/core/skills.js';
 import { loadEmbedder } from './lib/embedder.js';
 import { GateRefused } from './lib/gate.js';
@@ -7,7 +8,8 @@ import { exportFiles, readLedger, readReceipts, verifyLedger } from './lib/ledge
 import { idbStore } from './lib/store.js';
 import { listen, receiptVoice } from './lib/voice.js';
 import { ingestText, newOnly, parsePdfText } from './lib/core/ingest.js';
-import { addNote, closeVault, createVault, forgetNote, openVault, readDisclosure, readNotes, signerFingerprint, vaultExists } from './lib/vault.js';
+import { addNote, closeVault, createVault, forgetNote, openVault, readDisclosure, readNotes, readProfile, saveProfile, signerFingerprint, vaultExists } from './lib/vault.js';
+import { mountCompanion } from './companion.js';
 
 const MODEL = 'nvidia/nemotron-3-super-120b-a12b';
 const FAST_MODEL = 'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B';
@@ -18,6 +20,10 @@ let vault = null;
 let embedder = null;
 
 const $ = (id) => document.getElementById(id);
+// The face that shows what NOAI is doing. It only reports what the code below did.
+const pal = mountCompanion({ face: $('face'), line: $('cline'), picker: $('chars'), label: $('cname') });
+pal.set('sleep');
+let profile = {};
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 /** Escape first, then mark every placeholder the model saw in place of a real value. */
 const withPlaceholders = (s) => esc(s).replace(/\[[A-Z]+_\d+\]/g, '<mark class="ph">$&</mark>');
@@ -65,11 +71,14 @@ async function refresh() {
     : 'No vault in this browser yet. The passphrase you choose now creates one. Forget it and the vault is gone: there is no reset.';
   $('unlock').textContent = exists ? 'Unlock' : 'Create vault';
   $('lock').classList.toggle('hidden', !!vault);
+  $('callme').disabled = $('callmesave').disabled = !vault;
+  $('callmehint').textContent = vault ? 'Sealed in your vault and never sent.' : 'Sealed in your vault and never sent. Unlock first.';
   $('app').classList.toggle('hidden', !vault);
   if (vault) {
     const notes = await readNotes(vault);
     const reminders = notes.filter((n) => n.kind === 'reminder').sort((a, b) => (a.title < b.title ? -1 : 1));
-    const rest = notes.filter((n) => n.kind !== 'reminder');
+    const rest = notes.filter((n) => n.kind !== 'reminder' && n.kind !== CHECKIN_KIND);
+    drawCheckins(notes);
     const item = (n) => {
       if (n.kind === 'reminder') return `<li class="rem"><span class="when">${esc(n.title)}</span><span>${esc(n.body)}</span><span class="seal">sealed</span><button class="forget" data-id="${esc(n.id)}" aria-label="Forget this reminder">forget</button></li>`;
       const label = n.kind === 'memory' ? n.body : n.title;
@@ -81,8 +90,25 @@ async function refresh() {
   await drawTape();
 }
 
+// The highest receipt already on screen, so only a receipt that just arrived rises in.
+let shownSeq = null;
+
+/** Today's check-ins, newest first, and the routines as one-tap buttons. */
+function drawCheckins(notes) {
+  const now = new Date();
+  const all = notes.filter((n) => n.kind === CHECKIN_KIND).sort((a, b) => (a.addedAt < b.addedAt ? 1 : -1));
+  const today = all.filter((n) => new Date(n.addedAt).toDateString() === now.toDateString());
+  $('routines').innerHTML = routines(all).map((r, i) => `<button type="button" data-i="${i}" aria-label="Check in: ${esc(r.who)} ${esc(r.what)}"><span class="tick" aria-hidden="true">\u2713</span><span><span class="who">${esc(r.who === 'me' ? 'Me' : r.who)}</span> ${esc(r.what)}</span></button>`).join('');
+  $('routines').dataset.list = JSON.stringify(routines(all));
+  $('cilist').innerHTML = today.map((n) => `<li><span class="t">${esc(whenSaid(new Date(n.addedAt), now).replace('today at ', ''))}</span><span class="w"><b>${esc(n.title === 'me' ? 'Me' : n.title)}</b> ${esc(n.body)}</span><button class="forget" data-id="${esc(n.id)}" aria-label="Forget this check-in">forget</button></li>`).join('')
+    || '<li class="none">No check-ins yet today.</li>';
+}
+
 async function drawTape() {
   const entries = await readLedger(store);
+  const top = entries.reduce((m, e) => Math.max(m, e.seq), -1);
+  const seenBefore = shownSeq;
+  shownSeq = top;
   const receipts = await readReceipts(store);
   const v = verifyLedger(entries, receipts);
   $('verdict').className = `verdict ${v.valid ? 'ok' : 'bad'}`;
@@ -96,7 +122,8 @@ async function drawTape() {
     const broken = !v.valid && v.brokenAt === e.seq;
     const n = (r.sources ?? []).length;
     const outcome = r.outcome ? `<span class="chip">${r.outcome === 'timeout' ? 'no answer in time' : 'no answer'}</span>` : '';
-    cards.push(`<div class="link${broken ? ' broken' : ''}"><div class="rail"></div><div class="card${broken ? ' broken' : ''}">
+    const fresh = seenBefore !== null && e.seq > seenBefore;
+    cards.push(`<div class="link${broken ? ' broken' : ''}${fresh ? ' new' : ''}"><div class="rail"></div><div class="card${broken ? ' broken' : ''}">
       <div class="top"><b>#${e.seq}</b><span>${esc(new Date(e.at).toLocaleTimeString())}</span><span class="model">${esc(e.model.split('/').pop())}</span><span class="out">${e.payloadBytes} bytes out</span></div>
       <div class="chips"><span class="chip">${n} passage${n === 1 ? '' : 's'}</span>${reds || '<span class="chip">no redactions needed</span>'}${outcome}${r.usage ? `<span class="chip">${r.usage.promptTokens} in / ${r.usage.completionTokens} out tokens</span>` : ''}</div>
       ${disclosed ? `<details><summary>Exactly what the model saw</summary><pre>${withPlaceholders(disclosed)}</pre><p class="hash">payload sha256 ${esc(e.payloadHash)}<br>entry ${esc(e.entryHash)}<br>prev ${esc(e.prev)}</p></details>` : ''}
@@ -104,6 +131,13 @@ async function drawTape() {
     </div></div>`);
   }
   $('tape').innerHTML = cards.join('');
+}
+
+/** After a tamper, bring the receipt where the chain breaks into view; it is often the oldest, at the bottom. */
+async function drawTapeShowingBreak() {
+  await drawTape();
+  if ($('verdict').classList.contains('bad')) pal.set('alarm');
+  document.querySelector('#tape .link.broken')?.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
 }
 
 $('unlock').onclick = async () => {
@@ -115,6 +149,10 @@ $('unlock').onclick = async () => {
   try {
     vault = (await vaultExists(store)) ? await openVault(store, pass, progress) : await createVault(store, pass, progress);
     $('pass').value = '';
+    profile = await readProfile(vault);
+    pal.setName(profile.name);
+    $('callme').value = profile.name ?? '';
+    pal.set('happy', 'hello');
   } catch (e) {
     $('lockerr').textContent = e.message;
   }
@@ -127,17 +165,29 @@ $('ask').onclick = async () => {
   const q = $('q').value.trim();
   if (!q) return;
   $('ask').disabled = true;
+  pal.set('think');
   $('answer').className = 'answer';
   $('answer').textContent = 'Ranking in this tab, redacting, sending through the gate...';
   $('stats').textContent = '';
   try {
     await embedderReady;
     const r = await respond(vault, cfg, q, { embedder });
-    if (r.kind === 'memory') {
+    if (r.kind === 'checkin') {
+      $('answer').innerHTML = `<div class="kept">Checked in: ${esc(r.note.title === 'me' ? 'you' : r.note.title)} ${esc(r.note.body)}, ${esc(whenSaid(new Date(r.note.addedAt), new Date()))}.</div>`;
+      $('stats').innerHTML = '<b>0 bytes sent.</b> A check-in is sealed on this device with its time, and never calls the model.';
+      $('q').value = '';
+      pal.set('kept', 'checkin', { who: r.note.title, what: r.note.body });
+    } else if (r.kind === 'checkin-answer') {
+      $('answer').textContent = r.answer;
+      $('stats').innerHTML = '<b>0 bytes sent.</b> Answered on this device from your sealed check-ins. No model call and no receipt.';
+      pal.set('happy', 'local', { yes: !!r.found });
+    } else if (r.kind === 'memory') {
       $('answer').innerHTML = `<div class="kept">Kept in your vault: ${esc(r.note.body)}</div>`;
       $('stats').innerHTML = '<b>0 bytes sent.</b> Saving a memory never calls the model and writes no receipt, because nothing left.';
       $('q').value = '';
+      pal.set('kept');
     } else {
+      pal.set('happy', 'happy', { sent: r.used, hid: Object.values(r.signed?.receipt?.redactions ?? {}).reduce((a, b) => a + b, 0) });
       const kept = [...r.remembered.map((m) => `Kept in your vault: ${esc(m.body)}`), ...r.reminders.map((m) => `Reminder set for ${esc(m.title)}: ${esc(m.body)}`)];
       $('answer').innerHTML = esc(r.answer).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') + kept.map((k) => `<div class="kept">${k}</div>`).join('');
       const who = r.fellBack ? ' · <span class="fell">answered by Nemotron Nano, because Nemotron Super did not answer in time</span>' : '';
@@ -145,10 +195,11 @@ $('ask').onclick = async () => {
     }
     if (spoken) {
       $('stats').innerHTML += ` · <span class="voice">${esc(spoken)}</span>`;
-      const said = r.kind === 'memory' ? `Kept in your vault: ${r.note.body}` : r.answer;
+      const said = r.kind === 'memory' ? `Kept in your vault: ${r.note.body}` : r.kind === 'checkin' ? `Checked in: ${r.note.title} ${r.note.body}` : r.answer;
       if (!sayAloud(said.replace(/\*\*/g, '').replace(/\[P\d+\]/g, ''))) $('stats').innerHTML += ' · <span class="voice">no on-device voice in this browser, so the answer is not read aloud</span>';
     }
   } catch (e) {
+    pal.set('oops');
     $('answer').className = 'answer err';
     $('answer').textContent = e instanceof GateRefused ? e.message : `Not answered: ${e.message}`;
   }
@@ -157,6 +208,15 @@ $('ask').onclick = async () => {
   await refresh();
 };
 $('q').onkeydown = (e) => { if (e.key === 'Enter') $('ask').click(); };
+$('q').oninput = () => { if (vault && pal.state !== 'think') pal.set($('q').value ? 'listen' : 'idle', $('q').value ? 'listen' : null); };
+$('callmesave').onclick = async () => {
+  if (!vault) return;
+  profile = { ...profile, name: $('callme').value.trim().slice(0, 40) };
+  await saveProfile(vault, profile);
+  pal.setName(profile.name);
+  pal.set('happy', 'hello');
+};
+$('callme').onkeydown = (e) => { if (e.key === 'Enter') $('callmesave').click(); };
 
 // Voice: speak a question, hear the answer. The audio goes to AssemblyAI and is receipted;
 // the answer is read aloud only by a voice that runs on this device, so it adds no second egress.
@@ -184,6 +244,7 @@ $('speak').onclick = async () => {
     $('stats').textContent = '';
     try {
       session = await listen({ onPartial: (t) => ($('q').value = t) });
+      pal.set('listen');
       $('speak').textContent = 'Stop';
       $('speak').classList.add('live');
       $('speak').setAttribute('aria-pressed', 'true');
@@ -259,17 +320,45 @@ $('imp').onchange = async () => {
   $('impstat').innerHTML = `${lines.join('<br>')}<br>Nothing was sent.`;
   await refresh();
 };
+async function tapCheckin(who, what) {
+  if (!vault || !who.trim() || !what.trim()) return;
+  const r = await checkIn(vault, who, what);
+  $('answer').className = 'answer';
+  $('answer').innerHTML = `<div class="kept">Checked in: ${esc(r.note.title === 'me' ? 'you' : r.note.title)} ${esc(r.note.body)}, ${esc(whenSaid(new Date(r.note.addedAt), new Date()))}.</div>`;
+  $('stats').innerHTML = '<b>0 bytes sent.</b> A check-in is sealed on this device with its time, and never calls the model.';
+  pal.set('kept', 'checkin', { who: r.note.title, what: r.note.body });
+  await refresh();
+}
+$('routines').onclick = (e) => {
+  const b = e.target.closest('button[data-i]');
+  if (!b) return;
+  const r = JSON.parse($('routines').dataset.list || '[]')[Number(b.dataset.i)];
+  if (r) tapCheckin(r.who, r.what);
+};
+$('ciadd').onclick = async () => {
+  await tapCheckin($('ciwho').value, $('ciwhat').value);
+  $('ciwhat').value = '';
+};
+$('ciwhat').onkeydown = (e) => { if (e.key === 'Enter') $('ciadd').click(); };
+$('cilist').onclick = async (e) => {
+  const b = e.target.closest('.forget');
+  if (!b || !confirm('Delete this check-in from the vault? This cannot be undone.')) return;
+  await forgetNote(vault, b.dataset.id);
+  await refresh();
+};
 $('notes').onclick = async (e) => {
   const b = e.target.closest('.forget');
   if (!b || !confirm('Delete this sealed entry from the vault? This cannot be undone.')) return;
   await forgetNote(vault, b.dataset.id);
   await refresh();
 };
-$('lockbtn').onclick = async () => { closeVault(vault); vault = null; await refresh(); };
+$('lockbtn').onclick = async () => { closeVault(vault); vault = null; pal.setName(''); pal.set('sleep'); await refresh(); };
 $('wipe').onclick = async () => {
   if (!confirm('Delete the vault, receipts and chain from this browser? There is no other copy.')) return;
   closeVault(vault);
   vault = null;
+  pal.setName('');
+  pal.set('sleep');
   for (const k of ['vault', 'ledger', 'receipts', 'ledger.before-tamper', 'receipts.before-tamper']) await store.del(k);
   await refresh();
 };
@@ -289,7 +378,7 @@ $('tamper').onclick = async () => {
   // Rewrite history: claim the first disclosure was smaller than it was.
   entries[0].payloadBytes = Math.max(1, Math.floor(entries[0].payloadBytes / 4));
   await store.put('ledger', entries);
-  await drawTape();
+  await drawTapeShowingBreak();
 };
 $('delreceipt').onclick = async () => {
   const receipts = await readReceipts(store);
@@ -297,7 +386,7 @@ $('delreceipt').onclick = async () => {
   await backup();
   // Hide one disclosure: delete the most recent receipt and keep the chain.
   await store.put('receipts', receipts.slice(0, -1));
-  await drawTape();
+  await drawTapeShowingBreak();
 };
 $('restore').onclick = async () => {
   const ledger = await store.get('ledger.before-tamper');
@@ -308,6 +397,7 @@ $('restore').onclick = async () => {
   await store.del('ledger.before-tamper');
   await store.del('receipts.before-tamper');
   await drawTape();
+  if (vault) pal.set('happy', 'restored');
 };
 $('export').onclick = async () => {
   for (const [name, text] of Object.entries(await exportFiles(store))) {

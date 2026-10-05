@@ -90,6 +90,16 @@ export async function readDisclosure(v, receiptId) {
   return s ? fromUtf8(await open(v.masterKey, s, utf8(receiptId))) : null;
 }
 
+/** The owner's own settings (what the companion calls them), sealed like a note and never retrieved or sent. */
+export async function saveProfile(v, profile) {
+  v.data.profile = await seal(v.masterKey, utf8(JSON.stringify(profile)), utf8('profile'));
+  await writeVault(v);
+}
+
+export async function readProfile(v) {
+  return v.data.profile ? JSON.parse(fromUtf8(await open(v.masterKey, v.data.profile, utf8('profile')))) : {};
+}
+
 export const unwrapSecretKey = (v) => open(v.masterKey, v.data.device.privateKey);
 export const signerFingerprint = (publicKeyB64) => sha256(unb64(publicKeyB64)).slice(0, 16);
 
