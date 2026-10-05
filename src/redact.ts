@@ -69,6 +69,26 @@ function isDate(m: string): boolean {
   return /^\d{4}-\d{1,2}-\d{1,2}$/.test(s) || /^\d{1,2}[./-]\d{1,2}[./-]\d{4}$/.test(s);
 }
 
+const noPlaceholder = (m: string): boolean => !/\[[A-Z]+_\d+\]/.test(m);
+
+const NUMERIC_DATE = String.raw`(?:\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}-\d{1,2}-\d{1,2})`;
+const WRITTEN_DATE = String.raw`(?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9},?\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4})`;
+const DOB = new RegExp(String.raw`(?<=\b(?:born(?:\s+on)?|date\s+of\s+birth|d\.?o\.?b\.?|birth\s*date)\s*[:\-]?\s*|(?:تاريخ الميلاد|مولود|مولودة|ولدت|تاريخ ميلاد[ةه]?)(?:\s+في)?\s*[:\-]?\s*)(?:${NUMERIC_DATE}|${WRITTEN_DATE})`, 'gi');
+
+const ADDRESS_CODE = /\b[A-Z]{4}\d{4}\b/g;
+const ADDRESS_STREET = /\b\d{1,5}\s+(?:[A-Z][\w'-]*\s+){1,3}(?:Street|St|Road|Rd|Avenue|Ave|Boulevard|Blvd|Lane|Ln|Drive|Dr|Way)\b\.?(?:,?\s+(?:[A-Z][\w'-]*\s*){1,3})?/g;
+const ADDRESS_CUED = /(?<=\b(?<!e-?mail |ip |web |mac )(?:(?:my|our|his|her|their|home|work|office|delivery|shipping|billing|mailing|street|postal|postal code|zip code|po box)\s+address\s*(?:is|:)?|lives?\s+at|living\s+at|resides?\s+at|located\s+at|p\.?o\.?\s*box|postal\s+code|zip\s+code)\s*[:\-]?\s*)[^\n.;!?]{4,80}/gi;
+const ADDRESS_CUED_ARABIC = /(?<=(?:العنوان|عنواني|ص\.?\s?ب\.?|الرمز البريدي|رقم المبنى|يسكن في|تسكن في|اسكن في|أسكن في)\s*[:\-]?\s*)[^\n.؛!؟]{3,60}/g;
+
+const MEDICAL_TERMS = [
+  'diabetes', 'diabetic', 'hypertension', 'high blood pressure', 'cancer', 'chemotherapy', 'leukemia', 'leukaemia', 'HIV', 'hepatitis',
+  'asthma', 'epilepsy', 'depression', 'anxiety disorder', 'bipolar', 'schizophrenia', 'ADHD', 'autism', 'PTSD', 'pregnant', 'pregnancy', 'miscarriage',
+  'dialysis', 'kidney failure', 'heart disease', 'heart attack', 'migraine', 'arthritis', 'tuberculosis', 'insulin', 'metformin',
+  'antidepressants?', 'antipsychotics?',
+].join('|');
+const MEDICAL_ARABIC = ['سكري', 'سرطان', 'ربو', 'صرع', 'اكتئاب', 'فصام', 'إيدز', 'ايدز', 'الفشل الكلوي', 'التهاب الكبد', 'حامل', 'غسيل الكلى', 'جلطة', 'ارتفاع الضغط', 'ضغط الدم'].join('|');
+const MEDICAL = new RegExp(String.raw`(?<![\p{L}])(?:${MEDICAL_TERMS})(?![\p{L}])|(?<![\p{L}])(?:[والفب]?(?:ال)?)(?:${MEDICAL_ARABIC})(?![\p{L}])`, 'giu');
+
 /**
  * Order matters: the most specific patterns run first.
  *
@@ -83,6 +103,16 @@ const RULES: Rule[] = [
   { kind: 'IBAN', pattern: /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,4})?\b/g },
   { kind: 'CARD', pattern: /\b(?:\d[ -]?){13,19}\b/g, accept: luhn },
   { kind: 'ID', pattern: /(?<![\d+])[12]\d{9}(?!\d)/g },
+  // A date of birth: only a full date with a year, and only after a cue. A birthday
+  // with no year ("turns 30 on 22 November") stays readable, a reminder needs it.
+  { kind: 'DOB', pattern: DOB, accept: noPlaceholder },
+  // Where someone lives: a Saudi National Address code (four letters, four digits),
+  // a numbered street, or whatever follows "my address is", "lives at", العنوان.
+  { kind: 'ADDRESS', pattern: ADDRESS_CODE },
+  { kind: 'ADDRESS', pattern: ADDRESS_STREET, accept: noPlaceholder },
+  { kind: 'ADDRESS', pattern: ADDRESS_CUED, accept: noPlaceholder },
+  { kind: 'ADDRESS', pattern: ADDRESS_CUED_ARABIC, accept: noPlaceholder },
+  { kind: 'MEDICAL', pattern: MEDICAL },
   { kind: 'PASSPORT', pattern: /\b[A-Z]{1,2}\d{6,8}\b/g },
   { kind: 'PHONE', pattern: /(?<![\w])\+?\d[\d\s().-]{6,}\d(?![\w])/g, accept: (m) => m.replace(/\D/g, '').length >= 8 && !isDate(m) },
   { kind: 'IP', pattern: /\b(?:\d{1,3}\.){3}\d{1,3}\b/g },
