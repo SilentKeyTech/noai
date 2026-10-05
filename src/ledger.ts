@@ -14,7 +14,7 @@ import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { canonical, sha256, signBytes, unb64, verifyBytes } from './crypto.ts';
-import type { DisclosureReceipt, LedgerEntry, SignedDisclosure } from './types.ts';
+import type { DisclosureReceipt, LedgerEntry, SecretUseReceipt, SignedDisclosure, SignedReceipt, SignedSecretUse } from './types.ts';
 
 export const GENESIS = '0'.repeat(64);
 
@@ -31,6 +31,33 @@ export function verifyDisclosure(s: SignedDisclosure): boolean {
   return verifyBytes(unb64(s.receipt.signer), Buffer.from(canonical(s.receipt), 'utf8'), unb64(s.signature));
 }
 
+export function signSecretUse(receipt: SecretUseReceipt, privateKeyDer: Buffer): SignedSecretUse {
+  const sig = signBytes(privateKeyDer, Buffer.from(canonical(receipt), 'utf8'));
+  return { receipt, signature: sig.toString('base64url') };
+}
+
+export function verifySecretUse(s: SignedSecretUse): boolean {
+  if (s?.receipt?.version !== 1 || s.receipt.kind !== 'noai.secret-use') return false;
+  return verifyBytes(unb64(s.receipt.signer), Buffer.from(canonical(s.receipt), 'utf8'), unb64(s.signature));
+}
+
+/** Check any receipt the chain may hold. An unknown kind never verifies. */
+export function verifyReceipt(s: SignedReceipt): boolean {
+  if (s?.receipt?.kind === 'noai.secret-use') return verifySecretUse(s as SignedSecretUse);
+  return verifyDisclosure(s as SignedDisclosure);
+}
+
+/**
+ * The three fields the chain copies from a receipt. For a secret use, "model"
+ * names who used it (vault:<client>) and the hash is of the request as the
+ * agent wrote it, placeholders intact.
+ */
+function chainFields(s: SignedReceipt): { model: string; payloadHash: string; payloadBytes: number } {
+  const r = s.receipt;
+  if (r.kind === 'noai.secret-use') return { model: `vault:${r.client}`, payloadHash: r.requestHash, payloadBytes: r.requestBytes };
+  return { model: r.model, payloadHash: r.payloadHash, payloadBytes: r.payloadBytes };
+}
+
 export function entryDigest(entry: Omit<LedgerEntry, 'entryHash'>): string {
   return sha256(canonical(entry));
 }
@@ -44,9 +71,14 @@ async function readLines<T>(path: string): Promise<T[]> {
 }
 
 export const readLedger = (root: string): Promise<LedgerEntry[]> => readLines(ledgerPath(root));
-export const readReceipts = (root: string): Promise<SignedDisclosure[]> => readLines(receiptsPath(root));
+/**
+ * Every receipt, of every kind, in order. Typed as disclosures by default for the
+ * callers that only ever wrote those; ask for SignedReceipt where secret uses may
+ * be on the chain too.
+ */
+export const readReceipts = <T extends SignedReceipt = SignedDisclosure>(root: string): Promise<T[]> => readLines<T>(receiptsPath(root));
 
-export async function append(root: string, signed: SignedDisclosure): Promise<LedgerEntry> {
+export async function append(root: string, signed: SignedReceipt): Promise<LedgerEntry> {
   const existing = await readLedger(root);
   const last = existing[existing.length - 1];
   const body = {
@@ -54,9 +86,7 @@ export async function append(root: string, signed: SignedDisclosure): Promise<Le
     prev: last ? last.entryHash : GENESIS,
     receiptId: signed.receipt.receiptId,
     at: signed.receipt.at,
-    model: signed.receipt.model,
-    payloadHash: signed.receipt.payloadHash,
-    payloadBytes: signed.receipt.payloadBytes,
+    ...chainFields(signed),
     signature: signed.signature,
   };
   const entry: LedgerEntry = { ...body, entryHash: entryDigest(body) };
@@ -64,6 +94,15 @@ export async function append(root: string, signed: SignedDisclosure): Promise<Le
   await appendFile(receiptsPath(root), `${JSON.stringify(signed)}\n`, { mode: 0o600 });
   await appendFile(ledgerPath(root), `${JSON.stringify(entry)}\n`, { mode: 0o600 });
   return entry;
+}
+
+/**
+ * Every distinct key that signed a receipt, as a short fingerprint. A valid
+ * chain proves nothing was edited; it does not prove who wrote it. Compare
+ * this against the fingerprint the owner noted when the vault was made.
+ */
+export function signersOf(receipts: SignedReceipt[]): string[] {
+  return [...new Set(receipts.map((r) => sha256(unb64(r.receipt.signer)).slice(0, 16)))];
 }
 
 export interface Verdict {
@@ -77,7 +116,7 @@ export interface Verdict {
  * Walk the chain from genesis and check each link against its signed receipt.
  * Any edit, deletion, reorder or forged receipt breaks it at a named entry.
  */
-export function verifyLedger(entries: LedgerEntry[], receipts: SignedDisclosure[]): Verdict {
+export function verifyLedger(entries: LedgerEntry[], receipts: SignedReceipt[]): Verdict {
   const byId = new Map(receipts.map((r) => [r.receipt.receiptId, r]));
   const bad = (i: number, reason: string): Verdict => ({ valid: false, length: entries.length, brokenAt: i, reason });
   let prev = GENESIS;
@@ -89,8 +128,9 @@ export function verifyLedger(entries: LedgerEntry[], receipts: SignedDisclosure[
     if (entryDigest(body) !== entryHash) return bad(i, `Entry ${String(i)} was edited after it was written.`);
     const r = byId.get(e.receiptId);
     if (!r) return bad(i, `Entry ${String(i)} has no receipt. The receipt was deleted.`);
-    if (!verifyDisclosure(r)) return bad(i, `Receipt for entry ${String(i)} fails its signature. It was altered or forged.`);
-    if (r.signature !== e.signature || r.receipt.payloadHash !== e.payloadHash || r.receipt.payloadBytes !== e.payloadBytes) {
+    if (!verifyReceipt(r)) return bad(i, `Receipt for entry ${String(i)} fails its signature. It was altered or forged.`);
+    const f = chainFields(r);
+    if (r.signature !== e.signature || f.payloadHash !== e.payloadHash || f.payloadBytes !== e.payloadBytes || f.model !== e.model) {
       return bad(i, `Receipt for entry ${String(i)} does not match the chain. One of them was altered.`);
     }
     prev = entryHash;

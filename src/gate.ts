@@ -9,6 +9,10 @@
  *   4. send     to NVIDIA Nemotron on Nebius Token Factory
  *   5. receipt  signed with the device key, chained, sealed copy kept locally
  *   6. rehydrate placeholders back to real values, on device, for the owner
+ *
+ * It is also where an agent's request that names a vault secret leaves, see
+ * forwardWithSecrets() at the end: the placeholder becomes the real value here
+ * and nowhere else, and only on the way out.
  */
 import { newId, sha256 } from './crypto.ts';
 import { append } from './ledger.ts';
@@ -16,10 +20,16 @@ import { DEFAULT_MODEL, FAST_MODEL, prepareDisclosure, requestBody, stripThinkin
 import { type RedactOptions, redactAll, rehydrate, StreamRehydrator } from './redact.ts';
 
 export { buildPrompt, DEFAULT_MODEL, FAST_MODEL, stripThinking } from './prompt.ts';
-import type { Chunk, DisclosureReceipt, LedgerEntry, SignedDisclosure } from './types.ts';
-import { signDisclosure } from './ledger.ts';
+import type { Chunk, DisclosureReceipt, LedgerEntry, Placement, SecretUseReceipt, SignedDisclosure } from './types.ts';
+import { signDisclosure, signSecretUse } from './ledger.ts';
 import { type OpenVault, storeDisclosure, unwrapPrivateKey } from './vault.ts';
-import { scrub } from './crypto.ts';
+import { canonical, scrub } from './crypto.ts';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
+import { allSecretValues, blankCutTail, findSecret, MIN_SECRET_BYTES, PLACEHOLDER, redactSecrets, reloadSecrets, revealSecret } from './secrets.ts';
 
 export interface GateConfig {
   root: string;
@@ -434,6 +444,13 @@ export async function disclose(
   if (!cfg.apiKey) throw new GateRefused('NEBIUS_API_KEY is not set. Nothing was sent.');
 
   // 1. redact, with one placeholder space across question and passages
+  // A vault secret pasted into a note never reaches the model either: it goes as its placeholder.
+  const secrets = allSecretValues(v);
+  if (secrets.length) {
+    question = redactSecrets(question, secrets).text;
+    chunks = chunks.map((c) => ({ ...c, text: redactSecrets(c.text, secrets).text }));
+    for (const s of secrets) scrub(s.value);
+  }
   const red = prepareDisclosure(question, chunks, known);
   const disclosed = red.disclosed;
   const url = `${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`;
@@ -531,4 +548,467 @@ export async function disclose(
 
   // 6. rehydrate on device
   return { answer: rehydrate(out.rawAnswer, red.map), rawAnswer: out.rawAnswer, disclosed, signed: out.signed, entry: out.entry, ms: Date.now() - started, model, fellBack, restore: red.map };
+}
+
+// ---------------------------------------------------------------------------
+// The agent vault. An agent writes {{secret:name}} and never holds the value.
+//
+//   1. policy   the host and the part of the request must be ones the owner
+//               allowed for that secret, over https, or nothing is sent
+//   2. inject   the real value replaces the placeholder, here, as it leaves
+//   3. send     redirects are not followed, so a value cannot be carried on
+//   4. scrub    every vault secret is blanked from the response the agent gets
+//   5. receipt  signed and chained, sent or refused, with no secret in it
+// ---------------------------------------------------------------------------
+
+/** A request as the agent wrote it, placeholders and all. */
+export interface AgentRequest {
+  method?: string;
+  url: string;
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+export interface ForwardTransport {
+  (
+    url: string,
+    init: { method: string; headers: Record<string, string>; body?: string; redirect: 'manual'; signal?: AbortSignal },
+    maxBytes: number,
+  ): Promise<{ status: number; headers: [string, string][]; body: Buffer; truncated: boolean }>;
+}
+
+export const httpForward: ForwardTransport = async (url, init, maxBytes) => {
+  const res = await fetch(url, init);
+  const parts: Buffer[] = [];
+  let size = 0;
+  let truncated = false;
+  if (res.body) {
+    for await (const c of res.body) {
+      const b = Buffer.from(c as Uint8Array);
+      if (size + b.length > maxBytes) {
+        parts.push(b.subarray(0, maxBytes - size));
+        truncated = true;
+        break;
+      }
+      parts.push(b);
+      size += b.length;
+    }
+  }
+  return { status: res.status, headers: [...res.headers], body: Buffer.concat(parts), truncated };
+};
+
+export interface ForwardOptions {
+  transport?: ForwardTransport;
+  timeoutMs?: number;
+  /** the most response body the agent is handed, in bytes */
+  maxResponseBytes?: number;
+}
+
+export interface ForwardResult {
+  outcome: 'sent' | 'refused' | 'error';
+  status: number | null;
+  /** exactly what the agent is handed, secrets blanked. Its hash is on the receipt. */
+  handed: string;
+  reason?: string;
+  /** null only when the request named no secret, so nothing was sent and nothing is receipted */
+  receipt: SecretUseReceipt | null;
+  seq: number | null;
+}
+
+const METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
+/** Control characters replaced, so text an agent wrote cannot move the owner's cursor or erase lines when printed. */
+export const printable = (s: string): string => s.replace(/[\x00-\x1f\x7f-\x9f]/g, '?');
+/** Set by the transport, never by the agent. */
+const DROPPED = new Set(['host', 'content-length', 'connection', 'transfer-encoding', 'keep-alive', 'upgrade', 'te', 'trailer', 'proxy-authorization', 'proxy-connection']);
+
+export async function forwardWithSecrets(v: OpenVault, root: string, client: string, req: AgentRequest, opts: ForwardOptions = {}): Promise<ForwardResult> {
+  const transport = opts.transport ?? httpForward;
+  const maxBytes = opts.maxResponseBytes ?? 256 * 1024;
+  const timeoutMs = opts.timeoutMs ?? 30000;
+  const method = String(req.method ?? 'GET').toUpperCase();
+  const rawUrl = String(req.url ?? '');
+  const headersIn: Record<string, string> = {};
+  for (const [k, val] of Object.entries(req.headers ?? {})) headersIn[k] = String(val);
+  const body = typeof req.body === 'string' ? req.body : undefined;
+  const template = canonical({ method, url: rawUrl, headers: headersIn, body: body ?? null });
+
+  // Which secrets the request names, and where.
+  const uses = new Map<string, Set<Placement>>();
+  const encodings = new Map<string, Set<string>>();
+  const note = (s: string, where: Placement) => {
+    for (const m of s.matchAll(PLACEHOLDER)) {
+      const name = m[1] as string;
+      uses.set(name, (uses.get(name) ?? new Set<Placement>()).add(where));
+      encodings.set(name, (encodings.get(name) ?? new Set<string>()).add(m[2] ?? 'text'));
+    }
+  };
+  note(rawUrl, 'url');
+  for (const val of Object.values(headersIn)) note(val, 'header');
+  if (body !== undefined) note(body, 'body');
+  for (const k of Object.keys(headersIn)) note(k, 'header');
+
+  if (!uses.size) {
+    const reason = template.includes('{{secret:')
+      ? 'No usable placeholder. Write {{secret:name}} with the exact name from list_secrets. Nothing was sent.'
+      : 'This tool only sends requests that use a vault secret. Nothing was sent.';
+    return { outcome: 'refused', status: null, handed: `Refused: ${reason}`, reason, receipt: null, seq: null };
+  }
+
+  let host = '';
+  let path = '/';
+  // The vault file decides, not this process's memory: a secret removed in another window is gone now.
+  reloadSecrets(v);
+  const metas = new Map([...uses.keys()].map((n) => [n, findSecret(v, n)]));
+  // Only a known method, and no control characters, go on a receipt the owner will print.
+  const recordedMethod = METHODS.has(method) ? method : 'INVALID';
+
+  const receiptFor = async (outcome: SecretUseReceipt['outcome'], status: number | null, handed: string, echoes: number, reason?: string) => {
+    const receipt: SecretUseReceipt = {
+      version: 1,
+      kind: 'noai.secret-use',
+      statement:
+        outcome === 'refused'
+          ? 'An agent asked this device to insert the named vault secrets into a request to the host below. It was refused and nothing was sent.'
+          : 'This device inserted the named vault secrets into one request to the host below, as the request left. The secret values are not in this receipt.',
+      receiptId: newId(),
+      at: new Date().toISOString(),
+      client,
+      secrets: [...uses].map(([name, where]) => ({ id: metas.get(name)?.id ?? null, name, placements: [...where].sort() })),
+      method: recordedMethod,
+      host,
+      path: printable(path).slice(0, 512),
+      requestHash: sha256(template),
+      requestBytes: Buffer.byteLength(template, 'utf8'),
+      outcome,
+      status,
+      ...(reason ? { reason: printable(reason) } : {}),
+      responseHash: sha256(handed),
+      responseBytes: Buffer.byteLength(handed, 'utf8'),
+      echoesRedacted: echoes,
+      signer: v.data.device.publicKey,
+    };
+    const pk = unwrapPrivateKey(v);
+    const signed = signSecretUse(receipt, pk);
+    scrub(pk);
+    const entry = await append(root, signed);
+    return { receipt, seq: entry.seq };
+  };
+
+  const refuse = async (reason: string): Promise<ForwardResult> => {
+    const handed = `Refused: ${reason} Nothing was sent.`;
+    const r = await receiptFor('refused', null, handed, 0, reason);
+    return { outcome: 'refused', status: null, handed, reason, ...r };
+  };
+
+  // 1. policy, before any value is unsealed
+  const authority = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(rawUrl)?.[1] ?? '';
+  path = rawUrl.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, '').split(/[?#]/)[0] || '/';
+  if (authority.includes('{') || authority.includes('}')) return refuse('A secret cannot go in the host name.');
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return refuse('That is not a full URL.');
+  }
+  host = parsed.host.toLowerCase();
+  if (parsed.protocol !== 'https:') return refuse('Only https requests can carry a secret.');
+  if (parsed.username || parsed.password) return refuse('A URL with a user name or password in it cannot carry a secret.');
+  if (!METHODS.has(method)) return refuse(`That is not a method this tool sends. Use one of ${[...METHODS].join(', ')}.`);
+  if (body !== undefined && (method === 'GET' || method === 'HEAD')) return refuse(`A ${method} request cannot have a body.`);
+  for (const k of Object.keys(headersIn)) if (k.includes('{{')) return refuse('A secret cannot go in a header name.');
+  for (const [name, where] of uses) {
+    const meta = metas.get(name);
+    if (!meta) return refuse(`There is no secret named ${name} in the vault.`);
+    if (!meta.hosts.includes(host)) return refuse(`${name} may only be sent to ${meta.hosts.join(', ')}, not to ${host}.`);
+    for (const p of where) if (!meta.placements.includes(p)) return refuse(`${name} may not go in the request ${p}. The owner allowed: ${meta.placements.join(', ')}.`);
+    if (meta.kind === 'file' && encodings.get(name)?.has('text')) return refuse(`${name} is a file. Write {{secret:${name}:base64}}.`);
+  }
+
+  // 2. inject. The values live in these buffers for the length of one request and are
+  // scrubbed after. Honest limit: the strings built from them cannot be scrubbed in
+  // JavaScript and stay in this process's memory until the garbage collector reuses it.
+  const values = new Map([...uses.keys()].map((n) => [n, revealSecret(v, n) as Buffer]));
+  const inject = (s: string, inUrl = false) =>
+    s.replace(PLACEHOLDER, (_m, name: string, enc?: string) => {
+      const b = values.get(name) as Buffer;
+      const out = enc === 'base64' ? b.toString('base64') : b.toString('utf8');
+      return inUrl ? encodeURIComponent(out) : out;
+    });
+  const finalUrl = inject(rawUrl, true);
+  const finalHeaders: Record<string, string> = {};
+  for (const [k, val] of Object.entries(headersIn)) {
+    if (DROPPED.has(k.toLowerCase())) continue;
+    finalHeaders[k] = inject(val);
+  }
+  const finalBody = body === undefined ? undefined : inject(body);
+  let sameHost = false;
+  try {
+    sameHost = new URL(finalUrl).host.toLowerCase() === host;
+  } catch {
+    sameHost = false;
+  }
+  if (!sameHost || Object.values(finalHeaders).some((h) => /[\r\n\0]/.test(h))) {
+    for (const b of values.values()) scrub(b);
+    return refuse('Inserting the secret would change the request in a way that is not allowed.');
+  }
+
+  // 3. send
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Awaited<ReturnType<ForwardTransport>> | null = null;
+  let failure = '';
+  try {
+    res = await transport(finalUrl, { method, headers: finalHeaders, ...(finalBody === undefined ? {} : { body: finalBody }), redirect: 'manual', signal: controller.signal }, maxBytes);
+  } catch (e) {
+    failure = controller.signal.aborted ? `${host} did not answer within ${String(timeoutMs)} ms.` : `${host} could not be reached: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    clearTimeout(timer);
+    for (const b of values.values()) scrub(b);
+  }
+
+  // 4. scrub every vault secret from what goes back, error text included
+  const all = allSecretValues(v);
+  let echoes = 0;
+  const clean = (s: string): string => {
+    const r = redactSecrets(s, all);
+    echoes += r.count;
+    return r.text;
+  };
+  let handed: string;
+  if (!res) {
+    failure = clean(failure);
+    handed = `Failed: ${failure}`;
+  } else {
+    // Cookies a server sets are credentials minted from the secret. The agent does not need them.
+    const lines = res.headers.filter(([k]) => k.toLowerCase() !== 'set-cookie').map(([k, val]) => `${k.toLowerCase()}: ${clean(val)}`);
+    let text = clean(res.body.toString('utf8'));
+    if (res.truncated) {
+      // The cut may have fallen inside an echoed secret, leaving a start the whole-form scrub misses.
+      const cut = blankCutTail(text, all);
+      text = cut.text;
+      echoes += cut.count;
+    }
+    handed = [`HTTP ${String(res.status)}`, ...lines, '', text, ...(res.truncated ? [`[response cut at ${String(maxBytes)} bytes]`] : [])].join('\n');
+  }
+  for (const s of all) scrub(s.value);
+
+  // 5. receipt
+  const r = await receiptFor(res ? 'sent' : 'error', res ? res.status : null, handed, echoes, res ? undefined : failure);
+  return { outcome: res ? 'sent' : 'error', status: res ? res.status : null, handed, ...(res ? {} : { reason: failure }), ...r };
+}
+
+// ---------------------------------------------------------------------------
+// The owner's own tools. Some secrets are not sent over HTTPS but handed to a
+// program on this machine: a Gradle release build needs the upload keystore
+// file and its passwords. runWithSecrets() gives them to one process, for as
+// long as it runs, then takes them away:
+//
+//   1. env      text secrets become environment variables of that process only
+//   2. file     file secrets are written to a fresh private folder, and the
+//               variable holds the path. The folder is wiped when the tool exits.
+//   3. scrub    the tool's output is scrubbed of every vault secret, line by line
+//   4. receipt  signed and chained, like any other use, with no value in it
+//
+// Only the owner's command line calls this, after the passphrase. It is never
+// offered to an agent over MCP: an agent that could choose the command could
+// simply choose one that prints the secret.
+// ---------------------------------------------------------------------------
+
+export interface RunRequest {
+  command: string;
+  args: string[];
+  /** environment variable -> text secret name */
+  env?: Record<string, string>;
+  /** environment variable -> secret name; the variable is set to the path of a temporary copy */
+  files?: Record<string, string>;
+  cwd?: string;
+}
+
+export interface RunOptions {
+  /** where scrubbed output goes; defaults to this process's own stdout and stderr */
+  out?: (text: string) => void;
+  err?: (text: string) => void;
+  /** who asked, for the receipt */
+  client?: string;
+}
+
+export interface RunResult {
+  code: number | null;
+  outcome: 'sent' | 'refused' | 'error';
+  reason?: string;
+  /** the folder the file secrets were written to, already wiped */
+  tempDir: string | null;
+  receipt: SecretUseReceipt;
+  seq: number;
+}
+
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+
+export async function runWithSecrets(v: OpenVault, root: string, req: RunRequest, opts: RunOptions = {}): Promise<RunResult> {
+  const out = opts.out ?? ((t: string) => void process.stdout.write(t));
+  const err = opts.err ?? ((t: string) => void process.stderr.write(t));
+  const env = req.env ?? {};
+  const files = req.files ?? {};
+  const template = canonical({ command: req.command, args: req.args, env, files, cwd: req.cwd ?? null });
+  const uses = new Map<string, Set<Placement>>();
+  for (const name of Object.values(env)) uses.set(name, (uses.get(name) ?? new Set<Placement>()).add('env'));
+  for (const name of Object.values(files)) uses.set(name, (uses.get(name) ?? new Set<Placement>()).add('file'));
+  reloadSecrets(v);
+  const metas = new Map([...uses.keys()].map((n) => [n, findSecret(v, n)]));
+  const hash = createHash('sha256');
+  let handedBytes = 0;
+  let echoes = 0;
+
+  const receiptFor = async (outcome: SecretUseReceipt['outcome'], status: number | null, reason?: string) => {
+    const receipt: SecretUseReceipt = {
+      version: 1,
+      kind: 'noai.secret-use',
+      statement:
+        outcome === 'refused'
+          ? 'The owner asked this device to hand the named vault secrets to a local program. It was refused and nothing was handed over.'
+          : 'This device handed the named vault secrets to one local program for as long as it ran, then removed them. The secret values are not in this receipt.',
+      receiptId: newId(),
+      at: new Date().toISOString(),
+      client: opts.client ?? 'owner-cli',
+      secrets: [...uses].map(([name, where]) => ({ id: metas.get(name)?.id ?? null, name, placements: [...where].sort() })),
+      method: 'RUN',
+      host: 'local',
+      path: basename(req.command),
+      requestHash: sha256(template),
+      requestBytes: Buffer.byteLength(template, 'utf8'),
+      outcome,
+      status,
+      ...(reason ? { reason: printable(reason) } : {}),
+      // what the owner was shown: the tool's output after scrubbing
+      responseHash: hash.copy().digest('hex'),
+      responseBytes: handedBytes,
+      echoesRedacted: echoes,
+      signer: v.data.device.publicKey,
+    };
+    const pk = unwrapPrivateKey(v);
+    const signed = signSecretUse(receipt, pk);
+    scrub(pk);
+    const entry = await append(root, signed);
+    return { receipt, seq: entry.seq };
+  };
+
+  const refuse = async (reason: string): Promise<RunResult> => ({ code: null, outcome: 'refused', reason, tempDir: null, ...(await receiptFor('refused', null, reason)) });
+
+  if (!uses.size) return refuse('The command names no vault secret. Run it directly instead.');
+  for (const variable of [...Object.keys(env), ...Object.keys(files)]) if (!ENV_NAME.test(variable)) return refuse(`${variable} is not a usable environment variable name.`);
+  const clash = Object.keys(env).find((k) => k in files);
+  if (clash) return refuse(`${clash} is given both a value and a file.`);
+  for (const [name, where] of uses) {
+    const meta = metas.get(name);
+    if (!meta) return refuse(`There is no secret named ${name} in the vault.`);
+    if (where.has('env') && meta.kind === 'file') return refuse(`${name} is a file. Give it with --file, not --env.`);
+  }
+
+  // 1 and 2. The values exist outside the vault only in this child's environment and
+  // in one file inside a folder made for this run.
+  // The program gets this shell's environment minus everything that opens more than it
+  // was handed: the vault passphrase, the MCP token, any other NOAI or model key, and any
+  // variable that happens to hold a vault secret already.
+  const known = allSecretValues(v);
+  const holdsSecret = (val: string) => known.some((s) => s.value.length >= MIN_SECRET_BYTES && val.includes(s.value.toString('utf8')));
+  const childEnv: Record<string, string> = {};
+  for (const [k, val] of Object.entries(process.env)) {
+    if (val === undefined || /^(NOAI_|NEBIUS_)/i.test(k) || holdsSecret(val)) continue;
+    childEnv[k] = val;
+  }
+  for (const s of known) scrub(s.value);
+  let tempDir: string | null = null;
+  const buffers: Buffer[] = [];
+  const written: { path: string; bytes: number }[] = [];
+  try {
+    for (const [variable, name] of Object.entries(env)) {
+      const b = revealSecret(v, name) as Buffer;
+      buffers.push(b);
+      childEnv[variable] = b.toString('utf8');
+    }
+    if (Object.keys(files).length) {
+      tempDir = await mkdtemp(join(tmpdir(), 'noai-run-'));
+      for (const [variable, name] of Object.entries(files)) {
+        const b = revealSecret(v, name) as Buffer;
+        buffers.push(b);
+        const p = join(tempDir, `${name}${metas.get(name)?.fileName ? `-${metas.get(name)?.fileName}` : ''}`);
+        await writeFile(p, b, { mode: 0o600, flag: 'wx' });
+        written.push({ path: p, bytes: b.length });
+        childEnv[variable] = p;
+      }
+    }
+  } catch (e) {
+    for (const b of buffers) scrub(b);
+    if (tempDir) await rm(tempDir, { recursive: true, force: true });
+    return refuse(`The secrets could not be prepared: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // 3. run, with output scrubbed a line at a time so a secret is never split across two writes unseen
+  const all = allSecretValues(v);
+  const pipe = (write: (t: string) => void) => {
+    let pending = '';
+    const emit = (t: string) => {
+      const r = redactSecrets(t, all);
+      echoes += r.count;
+      hash.update(r.text);
+      handedBytes += Buffer.byteLength(r.text, 'utf8');
+      write(r.text);
+    };
+    return {
+      data: (chunk: Buffer) => {
+        pending += chunk.toString('utf8');
+        const cut = pending.lastIndexOf('\n');
+        if (cut === -1) return;
+        emit(pending.slice(0, cut + 1));
+        pending = pending.slice(cut + 1);
+      },
+      end: () => {
+        if (pending) emit(pending);
+        pending = '';
+      },
+    };
+  };
+  // %VAR% in an argument becomes the path of a file secret, for tools that take a path
+  // rather than reading the environment. Never a text secret: arguments are visible
+  // to every program on the machine that lists processes.
+  const args = req.args.map((a) => a.replace(/%([A-Za-z_][A-Za-z0-9_]*)%/g, (m, name: string) => (name in files ? (childEnv[name] as string) : m)));
+  const o = pipe(out);
+  const e2 = pipe(err);
+  // Windows only runs a .bat or .cmd file, gradlew.bat for one, through the shell.
+  const viaShell = process.platform === 'win32' && /\.(bat|cmd)$/i.test(req.command);
+  // Through cmd.exe, a %VAR% left in the arguments would be expanded from the environment,
+  // putting a password on the command line where any program can list it.
+  const leaked = viaShell && args.some((a) => Object.keys(env).some((k) => a.toUpperCase().includes(`%${k.toUpperCase()}%`)));
+  if (leaked) {
+    for (const b of buffers) scrub(b);
+    for (const w of written) await writeFile(w.path, Buffer.alloc(w.bytes)).catch(() => undefined);
+    if (tempDir) await rm(tempDir, { recursive: true, force: true });
+    for (const s of all) scrub(s.value);
+    return { ...(await refuse('A text secret may not be named as %VAR% in the arguments: it would end up on the command line. Let the program read the variable itself.')), tempDir };
+  }
+  let code: number | null = null;
+  let failure = '';
+  try {
+    code = await new Promise<number | null>((done, fail) => {
+      const child = spawn(viaShell ? `"${req.command}"` : req.command, args, { env: childEnv, cwd: req.cwd, shell: viaShell, stdio: ['inherit', 'pipe', 'pipe'], windowsHide: true });
+      child.stdout.on('data', o.data);
+      child.stderr.on('data', e2.data);
+      child.on('error', fail);
+      child.on('close', (c) => done(c));
+    });
+  } catch (e) {
+    failure = redactSecrets(`${req.command} could not be started: ${e instanceof Error ? e.message : String(e)}`, all).text;
+  } finally {
+    o.end();
+    e2.end();
+    // 2, undone. Overwrite before deleting: best effort, since an SSD or a backup may keep old blocks.
+    for (const w of written) await writeFile(w.path, Buffer.alloc(w.bytes)).catch(() => undefined);
+    if (tempDir) await rm(tempDir, { recursive: true, force: true });
+    for (const b of buffers) scrub(b);
+    for (const s of all) scrub(s.value);
+  }
+
+  // 4. receipt
+  if (failure) return { code: null, outcome: 'error', reason: failure, tempDir, ...(await receiptFor('error', null, failure)) };
+  return { code, outcome: 'sent', tempDir, ...(await receiptFor('sent', code)) };
 }

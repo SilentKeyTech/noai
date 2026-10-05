@@ -19,7 +19,8 @@
 import { respond, sharedEmbedder } from './agent.ts';
 import { newId, scrub, sha256 } from './crypto.ts';
 import type { Embedder } from './embed.ts';
-import { type GateConfig, GateRefused, httpTransport, type Transport } from './gate.ts';
+import { type AgentRequest, type ForwardOptions, forwardWithSecrets, type GateConfig, GateRefused, httpTransport, type Transport } from './gate.ts';
+import { allSecretValues, listSecrets, placeholderFor, redactSecrets, reloadSecrets } from './secrets.ts';
 import { append, readLedger, readReceipts, signDisclosure, verifyLedger } from './ledger.ts';
 import { splitMemories } from './memory.ts';
 import { knownPeople } from './people.ts';
@@ -38,7 +39,17 @@ export interface McpContext {
   reveal: string[];
   transport?: Transport;
   embedder?: Embedder | null;
+  /**
+   * Which tools this server offers. 'notes' (the default) is the private memory,
+   * 'vault' is the agent vault alone, for coding agents such as Claude Code,
+   * 'all' is both.
+   */
+  toolset?: Toolset;
+  /** how vault requests leave; tests pass a stand-in transport here */
+  forward?: ForwardOptions;
 }
+
+export type Toolset = 'notes' | 'vault' | 'all';
 
 /** Who is on the other end, from its initialize request. Named on every receipt. */
 export interface McpSession {
@@ -106,6 +117,47 @@ export const TOOLS = [
   },
 ] as const;
 
+export const VAULT_TOOLS = [
+  {
+    name: 'list_secrets',
+    title: 'List vault secrets',
+    description:
+      "List the secrets in the owner's vault by name, with the hosts each may be sent to and where in a request it may go. Never returns a value. Use a secret by writing its placeholder, such as {{secret:github_token}}, in an http_request.",
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'http_request',
+    title: 'HTTPS request using a vault secret',
+    description:
+      "Send one HTTPS request that needs a secret, without seeing the secret. Write {{secret:name}} where the value goes (for example the header Authorization: Bearer {{secret:github_token}}); write {{secret:name:base64}} for a file or a value the API wants base64 encoded. The owner's device inserts the real value as the request leaves, only for the hosts and parts of the request the owner allowed, and blanks any secret from the response before you see it. Redirects are not followed. Every call, sent or refused, is signed and logged on the owner's device.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        method: { type: 'string', enum: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'], description: 'Default GET.' },
+        url: { type: 'string', description: 'Full https URL. A placeholder may go in the path or query only if the owner allowed url for that secret.' },
+        headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Request headers. Placeholders go in values, never in names.' },
+        body: { type: 'string', description: 'Request body as text, for example JSON.' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  },
+] as const;
+
+const NOTE_TOOLS = ['ask_noai', 'remember', 'list_reminders', 'verify_disclosures'];
+const VAULT_ONLY = ['list_secrets', 'http_request', 'verify_disclosures'];
+
+export function toolsFor(set: Toolset = 'notes') {
+  const all = [...TOOLS, ...VAULT_TOOLS];
+  const names = set === 'notes' ? NOTE_TOOLS : set === 'vault' ? VAULT_ONLY : [...NOTE_TOOLS, 'list_secrets', 'http_request'];
+  return names.map((n) => all.find((t) => t.name === n) as (typeof all)[number]);
+}
+
+const VAULT_INSTRUCTIONS =
+  "NOAI holds the owner's API keys and credentials so that you never see them. Call list_secrets to see what exists, then use http_request with a placeholder such as {{secret:github_token}} where the value belongs. Never ask the owner to paste a secret into the chat, and never try to print, echo or decode one: responses are scrubbed of secrets and every use is signed and logged on the owner's device.";
+
 const INSTRUCTIONS =
   "NOAI is the owner's private memory. Use ask_noai for anything about their life that you do not already know. Answers may contain placeholders like [PHONE_1]: the real value is on the owner's device and was deliberately withheld from you, so say 'your saved number' rather than guessing. Every answer handed to you is signed and logged on the owner's device.";
 
@@ -114,6 +166,16 @@ function withheld(t: string): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const m of t.matchAll(/\[([A-Z]+)_\d+\]/g)) counts[m[1] as string] = (counts[m[1] as string] ?? 0) + 1;
   return counts;
+}
+
+/** No tool hands a vault secret to a client, even one the owner pasted into a note by mistake. */
+export function scrubSecrets(v: OpenVault, t: string): string {
+  reloadSecrets(v);
+  const all = allSecretValues(v);
+  if (!all.length) return t;
+  const out = redactSecrets(t, all).text;
+  for (const s of all) scrub(s.value);
+  return out;
 }
 
 /** Restore only the kinds the owner allowed for MCP clients. */
@@ -161,7 +223,36 @@ export async function receiptHandover(
 
 async function callTool(ctx: McpContext, session: McpSession, name: string, args: Record<string, unknown>) {
   const root = ctx.cfg.root;
+  if (!toolsFor(ctx.toolset).some((t) => t.name === name)) return null;
   switch (name) {
+    case 'list_secrets': {
+      reloadSecrets(ctx.vault);
+      const secrets = listSecrets(ctx.vault).map((s) => ({
+        name: s.name,
+        placeholder: placeholderFor(s.name, s.kind === 'file' ? 'base64' : undefined),
+        kind: s.kind,
+        ...(s.fileName ? { fileName: s.fileName } : {}),
+        bytes: s.bytes,
+        hosts: s.hosts,
+        allowedIn: s.placements,
+      }));
+      if (!secrets.length) return text('The vault holds no secrets yet. The owner adds them on their own machine with: npm run vault -- add <name> --host <host>');
+      const lines = secrets.map((s) => `${s.placeholder}  ${s.kind}${s.fileName ? ` ${s.fileName}` : ''}, to ${s.hosts.join(', ')}, in ${s.allowedIn.join(', ')}`);
+      return { ...text(lines.join('\n')), structuredContent: { secrets } };
+    }
+    case 'http_request': {
+      const req: AgentRequest = {
+        url: typeof args.url === 'string' ? args.url : '',
+        ...(typeof args.method === 'string' ? { method: args.method } : {}),
+        ...(args.headers && typeof args.headers === 'object' && !Array.isArray(args.headers) ? { headers: Object.fromEntries(Object.entries(args.headers as Record<string, unknown>).map(([k, val]) => [k, String(val)])) } : {}),
+        ...(typeof args.body === 'string' ? { body: args.body } : {}),
+      };
+      const r = await forwardWithSecrets(ctx.vault, root, session.client, req, ctx.forward);
+      return {
+        ...text(r.handed, r.outcome !== 'sent'),
+        structuredContent: { outcome: r.outcome, status: r.status, receipt: r.seq, echoesRedacted: r.receipt?.echoesRedacted ?? 0 },
+      };
+    }
     case 'ask_noai': {
       const question = typeof args.question === 'string' ? args.question.trim() : '';
       if (!question) return text('Ask something.', true);
@@ -170,7 +261,7 @@ async function callTool(ctx: McpContext, session: McpSession, name: string, args
       // Start from what the model said, placeholders intact, and drop the lines meant for the device.
       // Citations like [P1] point at passages the assistant never sees, so they go too.
       const spoken = splitMemories(splitReminders(r.rawAnswer).answer).answer.replace(/\s*\(?\[P\d+\](?:,\s*\[P\d+\])*\)?/g, '');
-      const handed = revealOnly(spoken, r.restore, ctx.reveal);
+      const handed = scrubSecrets(ctx.vault, revealOnly(spoken, r.restore, ctx.reveal));
       const handover = await receiptHandover(ctx.vault, root, session.client, handed, r.signed.receipt.sources);
       const notes = [
         r.reminders.length ? `Reminder set for ${r.reminders.map((n) => n.title).join(', ')}.` : '',
@@ -201,7 +292,7 @@ async function callTool(ctx: McpContext, session: McpSession, name: string, args
       if (!due.length) return text('No upcoming reminders.');
       // The vault holds real values; the client gets the same redaction the model would.
       const red = redactAll(due.map((n) => `${n.title}: ${n.body}`), knownPeople(notes));
-      const handed = revealOnly(red.texts.join('\n'), red.map, ctx.reveal);
+      const handed = scrubSecrets(ctx.vault, revealOnly(red.texts.join('\n'), red.map, ctx.reveal));
       await receiptHandover(ctx.vault, root, session.client, handed, due.map((n) => ({ noteId: n.id, chunk: 0, chunkHash: sha256(n.body) })));
       return text(handed);
     }
@@ -238,13 +329,13 @@ export async function handleRpc(ctx: McpContext, session: McpSession | null, msg
         protocolVersion: (PROTOCOL_VERSIONS as readonly string[]).includes(asked) ? asked : LATEST_PROTOCOL,
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: 'noai', title: 'NOAI', version: '0.4.0' },
-        instructions: INSTRUCTIONS,
+        instructions: ctx.toolset === 'vault' ? VAULT_INSTRUCTIONS : ctx.toolset === 'all' ? `${INSTRUCTIONS} ${VAULT_INSTRUCTIONS}` : INSTRUCTIONS,
       });
     }
     case 'ping':
       return ok(id, {});
     case 'tools/list':
-      return ok(id, { tools: TOOLS });
+      return ok(id, { tools: toolsFor(ctx.toolset) });
     case 'tools/call': {
       if (!session) return fail(id, -32600, 'Initialize first.');
       const name = typeof params.name === 'string' ? params.name : '';
@@ -254,7 +345,7 @@ export async function handleRpc(ctx: McpContext, session: McpSession | null, msg
         return result ? ok(id, result) : fail(id, -32602, `Unknown tool: ${name}`);
       } catch (e) {
         // A refusal or a model failure is a tool result the assistant can read out, not a protocol error.
-        const why = e instanceof Error ? e.message : String(e);
+        const why = scrubSecrets(ctx.vault, e instanceof Error ? e.message : String(e));
         return ok(id, text(e instanceof GateRefused ? why : `NOAI could not answer: ${why}`, true));
       }
     }
