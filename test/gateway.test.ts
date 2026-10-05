@@ -202,22 +202,6 @@ describe('the gateway refuses what it cannot hide, and sends nothing', () => {
 });
 
 describe('streaming and models', () => {
-  it('answers stream:true as one rehydrated event followed by [DONE]', async () => {
-    const p = provider(echo);
-    const g = await start(p);
-    const res = await g.call('/v1/chat/completions', { body: chat('Ring 0551234567', { stream: true }) });
-    assert.equal(res.status, 200);
-    assert.match(res.headers.get('content-type') ?? '', /text\/event-stream/);
-    const body = await res.text();
-    assert.ok(body.endsWith('data: [DONE]\n\n'));
-    const first = JSON.parse(body.split('\n\n')[0]!.replace(/^data: /, '')) as { object: string; choices: { delta: { content: string } }[] };
-    assert.equal(first.object, 'chat.completion.chunk');
-    assert.equal(first.choices[0]!.delta.content, 'You wrote: Ring 0551234567');
-    assert.ok(!p.sent[0]!.includes('0551234567'));
-    assert.equal(JSON.parse(p.sent[0]!).stream, undefined, 'the provider is never asked to stream');
-    await g.close();
-  });
-
   it('lists the default model and the configured ones, without touching the provider', async () => {
     const p = provider();
     const g = await start(p);

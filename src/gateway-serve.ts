@@ -12,14 +12,14 @@
  * Bound to 127.0.0.1 unless NOAI_GATEWAY_HOST says otherwise. This file only
  * listens; forwarding, and the only outbound call, live in gate.ts.
  *
- * Streaming is answered, not streamed: the reply is rehydrated whole, then
- * sent as one event, so a client that asks for a stream still works.
+ * Streaming is real: pieces are passed on as they arrive, with the real values
+ * put back in each one. The receipt is written when the stream ends.
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
-import { forwardChat, type GatewayConfig, GatewayError, gatewayConfigFromEnv, httpTransport, type Transport } from './gate.ts';
+import { forwardChat, forwardChatStream, type GatewayConfig, GatewayError, gatewayConfigFromEnv, httpStreamTransport, httpTransport, type StreamTransport, type Transport } from './gate.ts';
 import { noaiHome } from './home.ts';
 import { readLedger, readReceipts, verifyLedger } from './ledger.ts';
 import { knownPeople } from './people.ts';
@@ -38,6 +38,7 @@ export interface GatewayServerOptions {
   /** Origins a browser page may call from. Requests with no Origin header are not from a page. */
   allowedOrigins?: string[];
   transport?: Transport;
+  streamTransport?: StreamTransport;
 }
 
 /** "amal:secret,omar:secret" -> name to secret. Secrets must be long enough to resist guessing. */
@@ -85,21 +86,6 @@ async function readBody(req: IncomingMessage): Promise<string | null> {
   return Buffer.concat(parts).toString('utf8');
 }
 
-/** The finished reply as one server-sent event, for clients that asked to stream. */
-function sendAsStream(res: ServerResponse, reply: Record<string, unknown>): void {
-  const choices = (Array.isArray(reply.choices) ? reply.choices : []) as { index?: number; message?: Record<string, unknown>; finish_reason?: string | null }[];
-  const chunk = {
-    id: reply.id,
-    object: 'chat.completion.chunk',
-    created: reply.created,
-    model: reply.model,
-    choices: choices.map((c, i) => ({ index: c.index ?? i, delta: { role: 'assistant', ...(c.message ?? {}) }, finish_reason: c.finish_reason ?? 'stop' })),
-    ...(reply.usage ? { usage: reply.usage } : {}),
-  };
-  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'close' });
-  res.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`);
-}
-
 const SESSION_MS = 8 * 60 * 60 * 1000;
 const LOGIN_WINDOW_MS = 5 * 60 * 1000;
 const LOGIN_MAX_FAILS = 5;
@@ -107,6 +93,7 @@ const LOGIN_MAX_FAILS = 5;
 export function createGatewayServer(opts: GatewayServerOptions): Server {
   const allowedOrigins = opts.allowedOrigins ?? [];
   const transport = opts.transport ?? httpTransport;
+  const streamTransport = opts.streamTransport ?? httpStreamTransport;
   const models = [...new Set([opts.cfg.model, ...(opts.models ?? [])])];
   const tokens = opts.tokens ?? new Map<string, string>();
   const root = opts.cfg.root;
@@ -205,8 +192,16 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const path = (req.url ?? '').split('?')[0] ?? '';
     if (path === '/admin' || path.startsWith('/admin/')) return admin(req, res, path);
+    if (path === '/chat' && req.method === 'GET') {
+      if (!hostOk(req)) return fail(res, 403, 'Host not allowed.');
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", 'x-content-type-options': 'nosniff' });
+      res.end(await readFile(new URL('../web/gateway-chat.html', import.meta.url)));
+      return;
+    }
     const origin = req.headers.origin;
-    if (origin && !allowedOrigins.includes(origin)) return fail(res, 403, 'Origin not allowed.');
+    // The chat page calls this API from its own address; any other page must be listed.
+    const ownOrigin = !!origin && hostOk(req) && (origin === `http://${req.headers.host}` || origin === `https://${req.headers.host}`);
+    if (origin && !ownOrigin && !allowedOrigins.includes(origin)) return fail(res, 403, 'Origin not allowed.');
     const client = who(req.headers.authorization, tokens) ?? (await authenticateToken(root, req.headers.authorization))?.name ?? null;
     if (!client) return fail(res, 401, 'Unauthorized.', { 'www-authenticate': 'Bearer realm="noai"' });
 
@@ -229,13 +224,43 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
     const request = json as Record<string, unknown>;
 
     // Names are re-read per request, so a contact added to the vault is hidden from the next call.
-    const r = await forwardChat(opts.vault, opts.cfg, request, client, transport, knownPeople(readNotes(opts.vault)));
-    if (request.stream === true) return sendAsStream(res, r.response);
+    const known = knownPeople(readNotes(opts.vault));
+    if (request.stream === true) {
+      const id = `chatcmpl-${randomBytes(9).toString('base64url')}`;
+      const created = Math.floor(Date.now() / 1000);
+      let model = typeof request.model === 'string' && request.model ? request.model : opts.cfg.model;
+      const event = (delta: Record<string, unknown>, finish: string | null = null, extra: Record<string, unknown> = {}): string =>
+        `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`;
+      let begun = false;
+      const begin = (): void => {
+        if (begun) return;
+        begun = true;
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+        res.write(event({ role: 'assistant', content: '' }));
+      };
+      try {
+        const r = await forwardChatStream(opts.vault, opts.cfg, request, client, (text) => {
+          begin();
+          res.write(event({ content: text }));
+        }, streamTransport, known);
+        model = r.model;
+        begin();
+        res.end(`${event({}, r.finishReason ?? 'stop', { noai: { receiptId: r.signed.receipt.receiptId, seq: r.entry.seq, payloadHash: r.signed.receipt.payloadHash, redactions: r.redactions } })}data: [DONE]\n\n`);
+      } catch (e) {
+        // Before the first piece there is still time to answer with a plain error; after it, end the stream with one.
+        if (!begun) throw e;
+        const message = e instanceof Error ? e.message : String(e);
+        res.end(`data: ${JSON.stringify({ error: { message, type: 'noai_gateway_error' } })}\n\ndata: [DONE]\n\n`);
+      }
+      return;
+    }
+    const r = await forwardChat(opts.vault, opts.cfg, request, client, transport, known);
     send(res, 200, r.response);
   };
 
   return createServer((req, res) => {
     handle(req, res).catch((e: unknown) => {
+      if (res.headersSent) return void res.end();
       if (e instanceof GatewayError) return fail(res, e.status, e.message);
       fail(res, 500, e instanceof Error ? e.message : String(e));
     });

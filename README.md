@@ -158,8 +158,14 @@ Limits, stated plainly:
 - The ChatGPT and Copilot apps cannot be pointed at a different address, so they cannot use the gateway.
 - Text only. Images, audio, files, tool calls and function calls are refused, because they can carry private data the gateway cannot hide. Nothing is sent when it refuses.
 - Only settings that carry no text are forwarded (temperature, top_p, max_tokens, stop, n, seed, penalties). Anything else the client sends, such as `user` or `metadata`, is dropped.
-- A request for a stream is answered whole, then sent as one event, because putting real values back needs the full reply. Clients that ask to stream still work; they just do not see words arrive one by one.
+- Streaming is real: words arrive as the provider writes them, with the real values put back in each piece. A placeholder cut in two by the network is held back until it is whole. The receipt is written when the stream ends. If a stream breaks part way, the client gets an error event and the call is receipted as an error.
 - Tokens do not expire. Revoke a person and their token stops on their next call. There is no single sign-on, no email invite and no per-person spending limit yet.
+
+### A chat page, nothing else to install
+
+Staff who have no AI tool of their own open `http://127.0.0.1:7794/chat`, paste their token, and chat. It streams, shows the model list, and under each answer says which kinds of value were hidden and the receipt number. History lives only in the browser tab. Text only. It is a plain page served by the gateway: no Docker, no Python, no account.
+
+If the company would rather use Open WebUI or LibreChat, point either at `http://<gateway>:7794/v1` with the staff member's token as the API key; see `docs/open-webui.md`. That route has not been tested here.
 
 ### People and the receipts page
 

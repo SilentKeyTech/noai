@@ -13,7 +13,7 @@
 import { newId, sha256 } from './crypto.ts';
 import { append } from './ledger.ts';
 import { DEFAULT_MODEL, FAST_MODEL, prepareDisclosure, requestBody, stripThinking } from './prompt.ts';
-import { type RedactOptions, redactAll, rehydrate } from './redact.ts';
+import { type RedactOptions, redactAll, rehydrate, StreamRehydrator } from './redact.ts';
 
 export { buildPrompt, DEFAULT_MODEL, FAST_MODEL, stripThinking } from './prompt.ts';
 import type { Chunk, DisclosureReceipt, LedgerEntry, SignedDisclosure } from './types.ts';
@@ -150,7 +150,7 @@ function gatewaySerial<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /** Redact every message with one placeholder space and build the body that will leave. */
-function gatewayBody(req: Record<string, unknown>, cfg: GatewayConfig, known: RedactOptions): { body: string; model: string; counts: Record<string, number>; map: Map<string, string> } {
+function gatewayBody(req: Record<string, unknown>, cfg: GatewayConfig, known: RedactOptions, stream = false): { body: string; model: string; counts: Record<string, number>; map: Map<string, string> } {
   for (const k of GATEWAY_REFUSED) {
     if (req[k] !== undefined) throw new GatewayError(`"${k}" is not supported by the NOAI gateway: tool calls can carry private data it cannot hide. Nothing was sent.`, 400);
   }
@@ -186,7 +186,7 @@ function gatewayBody(req: Record<string, unknown>, cfg: GatewayConfig, known: Re
   const model = typeof req.model === 'string' && req.model ? req.model : cfg.model;
   const params: Record<string, unknown> = {};
   for (const k of GATEWAY_PARAMS) if (req[k] !== undefined) params[k] = req[k];
-  const body = JSON.stringify({ model, ...params, messages: [{ role: 'system', content: GATEWAY_SYSTEM }, ...out] });
+  const body = JSON.stringify({ model, ...params, ...(stream ? { stream: true } : {}), messages: [{ role: 'system', content: GATEWAY_SYSTEM }, ...out] });
   return { body, model, counts: red.counts, map: red.map };
 }
 
@@ -278,8 +278,147 @@ export async function forwardChat(
       if (c.message && typeof val === 'string') c.message[k] = rehydrate(val, map);
     }
   }
-  json.noai = { receiptId: signed.receipt.receiptId, seq: entry.seq, payloadHash: signed.receipt.payloadHash };
+  json.noai = { receiptId: signed.receipt.receiptId, seq: entry.seq, payloadHash: signed.receipt.payloadHash, redactions: counts };
   return { response: json, disclosed: body, signed, entry, model, ms: Date.now() - started };
+}
+
+/** What a streaming call needs from the network: the body as it arrives, in pieces. */
+export interface StreamTransport {
+  (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }): Promise<{ ok: boolean; status: number; body: AsyncIterable<Uint8Array | string> | null; text(): Promise<string> }>;
+}
+
+export const httpStreamTransport: StreamTransport = async (url, init) => {
+  const r = await fetch(url, init);
+  return { ok: r.ok, status: r.status, body: r.body as unknown as AsyncIterable<Uint8Array> | null, text: () => r.text() };
+};
+
+export interface GatewayStreamResult {
+  signed: SignedDisclosure;
+  entry: LedgerEntry;
+  model: string;
+  ms: number;
+  finishReason: string | null;
+  /** how many values of each kind were hidden, never the values */
+  redactions: Record<string, number>;
+}
+
+/**
+ * Forward one chat completion and hand the reply on piece by piece, with the
+ * real values put back as each piece arrives. The receipt is written when the
+ * stream ends, hashing the whole reply as the provider sent it. A call that
+ * fails before the first piece throws a GatewayError like forwardChat; one that
+ * fails part way is receipted as an error and then throws, so the caller can
+ * end its own stream with an error.
+ */
+export async function forwardChatStream(
+  v: OpenVault,
+  cfg: GatewayConfig,
+  req: Record<string, unknown>,
+  client: string,
+  onPiece: (text: string) => void,
+  transport: StreamTransport = httpStreamTransport,
+  known: RedactOptions = {},
+): Promise<GatewayStreamResult> {
+  const started = Date.now();
+  if (!cfg.apiKey) throw new GatewayError('The gateway has no upstream key (NOAI_GATEWAY_KEY or NEBIUS_API_KEY). Nothing was sent.', 503);
+  const { body, model, counts, map } = gatewayBody(req, cfg, known, true);
+  const payloadBytes = Buffer.byteLength(body, 'utf8');
+  if (payloadBytes > cfg.maxPayloadBytes) {
+    throw new GatewayError(`Refused: ${String(payloadBytes)} bytes exceeds the ${String(cfg.maxPayloadBytes)} byte ceiling. Nothing was sent.`, 413);
+  }
+  const url = `${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`;
+
+  const receiptFor = (raw: string, outcome?: 'timeout' | 'error') =>
+    gatewaySerial(async () => {
+      const receipt: DisclosureReceipt = {
+        version: 1,
+        kind: 'noai.disclosure',
+        statement: 'This device sent exactly the payload whose hash is below, and nothing else, to the named model.',
+        receiptId: newId(),
+        at: new Date().toISOString(),
+        endpoint: new URL(url).host,
+        model,
+        payloadHash: sha256(body),
+        payloadBytes,
+        sources: [],
+        redactions: counts,
+        responseHash: sha256(raw),
+        usage: null,
+        signer: v.data.device.publicKey,
+        client,
+        ...(outcome ? { outcome } : {}),
+      };
+      const pk = unwrapPrivateKey(v);
+      const signed = signDisclosure(receipt, pk);
+      scrub(pk);
+      const entry = await append(cfg.root, signed);
+      await storeDisclosure(v, receipt.receiptId, body);
+      return { signed, entry };
+    });
+
+  const controller = new AbortController();
+  const timer = cfg.timeoutMs ? setTimeout(() => controller.abort(), cfg.timeoutMs) : null;
+  const rehydrator = new StreamRehydrator(map);
+  let raw = '';
+  let finishReason: string | null = null;
+  try {
+    let res: Awaited<ReturnType<StreamTransport>>;
+    try {
+      res = await transport(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` }, body, signal: controller.signal });
+    } catch (e) {
+      const timedOut = controller.signal.aborted;
+      await receiptFor('', timedOut ? 'timeout' : 'error');
+      throw new GatewayError(timedOut ? `${model} did not answer within ${String(cfg.timeoutMs)} ms.` : `${model} could not be reached: ${e instanceof Error ? e.message : String(e)}`, timedOut ? 504 : 502);
+    }
+    if (!res.ok || !res.body) {
+      const text = await res.text().catch(() => '');
+      await receiptFor(text, 'error');
+      throw new GatewayError(`The provider returned ${String(res.status)}: ${text.slice(0, 300)}`, 502);
+    }
+
+    const decoder = new TextDecoder();
+    let pending = '';
+    const line = (l: string): void => {
+      if (!l.startsWith('data:')) return;
+      const data = l.slice(5).trim();
+      if (!data || data === '[DONE]') return;
+      let j: { choices?: { delta?: { content?: unknown; reasoning_content?: unknown }; finish_reason?: string | null }[] };
+      try {
+        j = JSON.parse(data) as typeof j;
+      } catch {
+        return;
+      }
+      const c = j.choices?.[0];
+      if (c?.finish_reason) finishReason = c.finish_reason;
+      const piece = typeof c?.delta?.content === 'string' ? c.delta.content : '';
+      if (!piece) return;
+      raw += piece;
+      const out = rehydrator.push(piece);
+      if (out) onPiece(out);
+    };
+    try {
+      for await (const chunk of res.body) {
+        pending += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+        let nl = pending.indexOf('\n');
+        while (nl >= 0) {
+          line(pending.slice(0, nl).replace(/\r$/, ''));
+          pending = pending.slice(nl + 1);
+          nl = pending.indexOf('\n');
+        }
+      }
+      line(pending.trim());
+      const rest = rehydrator.flush();
+      if (rest) onPiece(rest);
+    } catch (e) {
+      const timedOut = controller.signal.aborted;
+      await receiptFor(raw, timedOut ? 'timeout' : 'error');
+      throw new GatewayError(timedOut ? `${model} stopped answering within ${String(cfg.timeoutMs)} ms.` : `The reply from ${model} broke off: ${e instanceof Error ? e.message : String(e)}`, timedOut ? 504 : 502);
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  const { signed, entry } = await receiptFor(raw);
+  return { signed, entry, model, ms: Date.now() - started, finishReason, redactions: counts };
 }
 
 export async function disclose(
