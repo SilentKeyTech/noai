@@ -196,6 +196,24 @@ describe('the chat page', () => {
     await g.close();
   });
 
+  it('wears the glass themes: both pages link the shared theme files, and the gateway serves them', async () => {
+    const g = await start(streamer(['x']));
+    for (const p of ['/chat', '/admin']) {
+      const html = await (await g.call(p, { method: 'GET', headers: { authorization: '' } })).text();
+      assert.ok(html.includes('href="/gateway-themes.css"'));
+      assert.ok(html.includes('src="/gateway-themes.js"'));
+    }
+    const css = await g.call('/gateway-themes.css', { method: 'GET', headers: { authorization: '' } });
+    assert.equal(css.status, 200);
+    assert.ok((css.headers.get('content-type') ?? '').startsWith('text/css'));
+    assert.match(await css.text(), /data-theme="purple-dark"/);
+    const js = await g.call('/gateway-themes.js', { method: 'GET', headers: { authorization: '' } });
+    assert.equal(js.status, 200);
+    assert.match(js.headers.get('content-type') ?? '', /javascript/);
+    await js.text();
+    await g.close();
+  });
+
   it('refuses a rebinding Host, and does not let a made-up own origin through', async () => {
     const g = await start(streamer(['x']));
     const status = await new Promise<number>((ok, no) => {

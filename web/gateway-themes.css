@@ -1,0 +1,142 @@
+  :root {
+    --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "Cascadia Mono", ui-monospace, Consolas, monospace;
+  }
+  /* Auto: orange, following the device. No attribute and no script needed. */
+  :root:not([data-theme]), :root[data-theme="orange-dark"] {
+    --page: radial-gradient(620px 520px at 8% 8%, #FFB54D 0%, rgba(255,181,77,0) 70%), radial-gradient(760px 560px at 78% 0%, #FF6400 0%, rgba(255,100,0,0) 70%), radial-gradient(620px 520px at 96% 96%, #D03400 0%, rgba(208,52,0,0) 70%), radial-gradient(680px 540px at 24% 104%, #FF8A1F 0%, rgba(255,138,31,0) 70%), #F25C05;
+    --ink: #0A0A0A; --ink2: rgba(10,10,10,.76); --ink3: rgba(10,10,10,.64); --rule: rgba(10,10,10,.16);
+    --glass: linear-gradient(135deg, rgba(255,255,255,.30) 0%, rgba(255,255,255,.12) 42%, rgba(255,255,255,.08) 100%);
+    --glass-edge: rgba(255,255,255,.55); --glass-shadow: 0 30px 70px rgba(110,24,0,.4); --sheen: rgba(255,255,255,.32); --glass-inset: rgba(255,255,255,.55);
+    --sub: rgba(255,255,255,.16); --sub-edge: rgba(255,255,255,.45); --answer: rgba(255,255,255,.24);
+    --field: rgba(14,10,8,.84); --field-edge: rgba(0,0,0,.6); --field-ink: #FF9A4D;
+    --btn: linear-gradient(180deg, #2C2521 0%, #0A0A0A 100%); --btn-ink: #FF9A4D; --btn-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 8px 20px rgba(110,24,0,.4);
+    --ghost: rgba(255,255,255,.24); --ghost-edge: rgba(10,10,10,.35); --lbl: #0A0A0A; --link: #0A0A0A;
+    --chip-edge: rgba(10,10,10,.35); --chip-ink: #0A0A0A; --red: #0A0A0A; --red-ink: #FF9A4D;
+    --ok: #0A0A0A; --ok-edge: #0A0A0A; --ok-ink: #7DFFD0; --bad: #0A0A0A; --bad-edge: #0A0A0A; --bad-ink: #FF8A95;
+    --tamper: #0A0A0A; --tamper-edge: #0A0A0A; --tamper-ink: #FFB27A; --dot: #0A0A0A;
+    --pre: rgba(14,10,8,.84); --pre-edge: rgba(0,0,0,.6); --pre-ink: #FFB27A; --ph: #FF7A1A; --ph-ink: #0A0A0A;
+    --tag-edge: #0A0A0A; --tag-ink: #0A0A0A; --kept: rgba(10,10,10,.86); --kept-ink: #7DFFD0; --focus: #0A0A0A;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      --page: radial-gradient(620px 520px at 6% 8%, #FFD2A1 0%, rgba(255,210,161,0) 70%), radial-gradient(760px 560px at 76% 2%, #FFB070 0%, rgba(255,176,112,0) 70%), radial-gradient(560px 460px at 96% 96%, #FF9A4D 0%, rgba(255,154,77,0) 70%), radial-gradient(680px 540px at 26% 104%, #FFE0C0 0%, rgba(255,224,192,0) 70%), #FFEBD8;
+      --ink: #1A1410; --ink2: rgba(26,20,16,.74); --ink3: rgba(26,20,16,.62); --rule: rgba(26,20,16,.12);
+      --glass: linear-gradient(135deg, rgba(255,255,255,.72) 0%, rgba(255,255,255,.42) 45%, rgba(255,255,255,.30) 100%);
+      --glass-edge: rgba(255,255,255,.95); --glass-shadow: 0 26px 60px rgba(160,60,0,.16); --sheen: rgba(255,255,255,.55); --glass-inset: #FFFFFF;
+      --sub: rgba(255,255,255,.50); --sub-edge: rgba(255,255,255,.95); --answer: rgba(255,255,255,.66);
+      --field: rgba(255,255,255,.84); --field-edge: rgba(26,20,16,.16); --field-ink: #1A1410;
+      --btn: #2E2E34; --btn-ink: #FFB27A; --btn-shadow: 0 6px 16px rgba(26,20,16,.22);
+      --ghost: rgba(255,255,255,.62); --ghost-edge: rgba(26,20,16,.16); --lbl: #1A1410; --link: #9A3412;
+      --chip-edge: rgba(26,20,16,.18); --chip-ink: #2A221C; --red: #2E2E34; --red-ink: #FFB27A;
+      --ok: #2E2E34; --ok-edge: #2E2E34; --ok-ink: #7DFFD0; --bad: #2E2E34; --bad-edge: #2E2E34; --bad-ink: #FF8A95;
+      --tamper: #2E2E34; --tamper-edge: #2E2E34; --tamper-ink: #FFB27A; --dot: #2E2E34;
+      --pre: rgba(255,255,255,.84); --pre-edge: rgba(26,20,16,.16); --pre-ink: #1A1410; --ph: #2E2E34; --ph-ink: #FFB27A;
+      --tag-edge: #1A1410; --tag-ink: #1A1410; --kept: #2E2E34; --kept-ink: #7DFFD0; --focus: #9A3412;
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="orange-light"] {
+    --page: radial-gradient(620px 520px at 6% 8%, #FFD2A1 0%, rgba(255,210,161,0) 70%), radial-gradient(760px 560px at 76% 2%, #FFB070 0%, rgba(255,176,112,0) 70%), radial-gradient(560px 460px at 96% 96%, #FF9A4D 0%, rgba(255,154,77,0) 70%), radial-gradient(680px 540px at 26% 104%, #FFE0C0 0%, rgba(255,224,192,0) 70%), #FFEBD8;
+    --ink: #1A1410; --ink2: rgba(26,20,16,.74); --ink3: rgba(26,20,16,.62); --rule: rgba(26,20,16,.12);
+    --glass: linear-gradient(135deg, rgba(255,255,255,.72) 0%, rgba(255,255,255,.42) 45%, rgba(255,255,255,.30) 100%);
+    --glass-edge: rgba(255,255,255,.95); --glass-shadow: 0 26px 60px rgba(160,60,0,.16); --sheen: rgba(255,255,255,.55); --glass-inset: #FFFFFF;
+    --sub: rgba(255,255,255,.50); --sub-edge: rgba(255,255,255,.95); --answer: rgba(255,255,255,.66);
+    --field: rgba(255,255,255,.84); --field-edge: rgba(26,20,16,.16); --field-ink: #1A1410;
+    --btn: #2E2E34; --btn-ink: #FFB27A; --btn-shadow: 0 6px 16px rgba(26,20,16,.22);
+    --ghost: rgba(255,255,255,.62); --ghost-edge: rgba(26,20,16,.16); --lbl: #1A1410; --link: #9A3412;
+    --chip-edge: rgba(26,20,16,.18); --chip-ink: #2A221C; --red: #2E2E34; --red-ink: #FFB27A;
+    --ok: #2E2E34; --ok-edge: #2E2E34; --ok-ink: #7DFFD0; --bad: #2E2E34; --bad-edge: #2E2E34; --bad-ink: #FF8A95;
+    --tamper: #2E2E34; --tamper-edge: #2E2E34; --tamper-ink: #FFB27A; --dot: #2E2E34;
+    --pre: rgba(255,255,255,.84); --pre-edge: rgba(26,20,16,.16); --pre-ink: #1A1410; --ph: #2E2E34; --ph-ink: #FFB27A;
+    --tag-edge: #1A1410; --tag-ink: #1A1410; --kept: #2E2E34; --kept-ink: #7DFFD0; --focus: #9A3412;
+    color-scheme: light;
+  }
+  :root[data-theme="purple-light"] {
+    --page: radial-gradient(620px 520px at 6% 8%, #C9B6FF 0%, rgba(201,182,255,0) 70%), radial-gradient(760px 560px at 76% 2%, #B79BFF 0%, rgba(183,155,255,0) 70%), radial-gradient(540px 440px at 96% 96%, rgba(255,176,120,.7) 0%, rgba(255,176,120,0) 70%), radial-gradient(680px 540px at 26% 104%, #D9C8FF 0%, rgba(217,200,255,0) 70%), #EEE8FF;
+    --ink: #1B1033; --ink2: rgba(27,16,51,.74); --ink3: rgba(27,16,51,.62); --rule: rgba(27,16,51,.12);
+    --glass: linear-gradient(135deg, rgba(255,255,255,.72) 0%, rgba(255,255,255,.42) 45%, rgba(255,255,255,.30) 100%);
+    --glass-edge: rgba(255,255,255,.95); --glass-shadow: 0 26px 60px rgba(76,29,149,.16); --sheen: rgba(255,255,255,.55); --glass-inset: #FFFFFF;
+    --sub: rgba(255,255,255,.50); --sub-edge: rgba(255,255,255,.95); --answer: rgba(255,255,255,.66);
+    --field: rgba(255,255,255,.82); --field-edge: rgba(109,63,209,.28); --field-ink: #1B1033;
+    --btn: #6D3FD1; --btn-ink: #FFFFFF; --btn-shadow: 0 6px 16px rgba(109,63,209,.28);
+    --ghost: rgba(255,255,255,.62); --ghost-edge: rgba(27,16,51,.16); --lbl: #B8400B; --link: #5B21B6;
+    --chip-edge: rgba(27,16,51,.18); --chip-ink: #2E2347; --red: #FF7A1A; --red-ink: #1B1033;
+    --ok: rgba(16,185,129,.12); --ok-edge: rgba(4,120,87,.35); --ok-ink: #046C4E; --bad: rgba(220,38,38,.10); --bad-edge: rgba(185,28,28,.45); --bad-ink: #991B1B;
+    --tamper: rgba(255,122,26,.10); --tamper-edge: #C2410C; --tamper-ink: #A8380A; --dot: #059669;
+    --pre: rgba(255,255,255,.82); --pre-edge: rgba(109,63,209,.28); --pre-ink: #1B1033; --ph: #FF7A1A; --ph-ink: #1B1033;
+    --tag-edge: #C2410C; --tag-ink: #A8380A; --kept: rgba(16,185,129,.12); --kept-ink: #046C4E; --focus: #6D3FD1;
+    color-scheme: light;
+  }
+  :root[data-theme="purple-dark"] {
+    --page: radial-gradient(900px 620px at 8% -6%, #4A2799 0%, rgba(74,39,153,0) 70%), radial-gradient(820px 600px at 92% 8%, #33197A 0%, rgba(51,25,122,0) 70%), radial-gradient(900px 600px at 50% 110%, #24105A 0%, rgba(36,16,90,0) 70%), #130A2C;
+    --ink: #FFFFFF; --ink2: rgba(255,255,255,.78); --ink3: rgba(255,255,255,.62); --rule: rgba(255,255,255,.12);
+    --glass: rgba(255,255,255,.055);
+    --glass-edge: rgba(255,255,255,.13); --glass-shadow: 0 20px 50px rgba(8,0,24,.45); --sheen: rgba(255,255,255,.04); --glass-inset: rgba(255,255,255,.08);
+    --sub: rgba(255,255,255,.045); --sub-edge: rgba(255,255,255,.12); --answer: rgba(255,255,255,.06);
+    --field: rgba(10,4,28,.45); --field-edge: rgba(255,255,255,.14); --field-ink: #FFFFFF;
+    --btn: #7C4DDB; --btn-ink: #FFFFFF; --btn-shadow: 0 4px 12px rgba(0,0,0,.25);
+    --ghost: rgba(255,255,255,.06); --ghost-edge: rgba(255,255,255,.20); --lbl: #C9B8FF; --link: #DDD3FF;
+    --chip-edge: rgba(255,255,255,.20); --chip-ink: rgba(255,255,255,.86); --red: #C9B8FF; --red-ink: #1A0E3A;
+    --ok: rgba(134,239,196,.08); --ok-edge: rgba(134,239,196,.35); --ok-ink: #86EFC4; --bad: rgba(255,93,108,.12); --bad-edge: rgba(255,93,108,.5); --bad-ink: #FF8A95;
+    --tamper: rgba(201,184,255,.10); --tamper-edge: #C9B8FF; --tamper-ink: #EDE7FF; --dot: #86EFC4;
+    --pre: rgba(10,4,28,.45); --pre-edge: rgba(255,255,255,.14); --pre-ink: rgba(255,255,255,.92); --ph: #C9B8FF; --ph-ink: #1A0E3A;
+    --tag-edge: #C9B8FF; --tag-ink: #DDD3FF; --kept: rgba(134,239,196,.08); --kept-ink: #86EFC4; --focus: #C9B8FF;
+    color-scheme: dark;
+  }
+  :root[data-theme="sky"] {
+    --page: radial-gradient(620px 520px at 6% 8%, #A9DDFF 0%, rgba(169,221,255,0) 70%), radial-gradient(760px 560px at 76% 2%, #8FD0FF 0%, rgba(143,208,255,0) 70%), radial-gradient(560px 460px at 96% 96%, #BBB0FF 0%, rgba(187,176,255,0) 70%), radial-gradient(680px 540px at 26% 104%, #C8ECFF 0%, rgba(200,236,255,0) 70%), #E2F4FF;
+    --ink: #0E1A2B; --ink2: rgba(14,26,43,.74); --ink3: rgba(14,26,43,.62); --rule: rgba(14,26,43,.12);
+    --glass: linear-gradient(135deg, rgba(255,255,255,.72) 0%, rgba(255,255,255,.42) 45%, rgba(255,255,255,.30) 100%);
+    --glass-edge: rgba(255,255,255,.95); --glass-shadow: 0 26px 60px rgba(20,90,160,.16); --sheen: rgba(255,255,255,.55); --glass-inset: #FFFFFF;
+    --sub: rgba(255,255,255,.50); --sub-edge: rgba(255,255,255,.95); --answer: rgba(255,255,255,.66);
+    --field: rgba(255,255,255,.84); --field-edge: rgba(14,26,43,.16); --field-ink: #0E1A2B;
+    --btn: #6A4BC4; --btn-ink: #FFFFFF; --btn-shadow: 0 6px 16px rgba(106,75,196,.26);
+    --ghost: rgba(255,255,255,.62); --ghost-edge: rgba(14,26,43,.16); --lbl: #5B3FB5; --link: #4B2FA6;
+    --chip-edge: rgba(14,26,43,.18); --chip-ink: #1E2A3C; --red: #6A4BC4; --red-ink: #FFFFFF;
+    --ok: #33363F; --ok-edge: #33363F; --ok-ink: #7DFFD0; --bad: #33363F; --bad-edge: #33363F; --bad-ink: #FF8A95;
+    --tamper: #33363F; --tamper-edge: #33363F; --tamper-ink: #FFFFFF; --dot: #33363F;
+    --pre: rgba(255,255,255,.84); --pre-edge: rgba(14,26,43,.16); --pre-ink: #0E1A2B; --ph: #6A4BC4; --ph-ink: #FFFFFF;
+    --tag-edge: #4B2FA6; --tag-ink: #4B2FA6; --kept: #33363F; --kept-ink: #7DFFD0; --focus: #6A4BC4;
+    color-scheme: light;
+  }
+
+
+  /* Shared by the gateway pages (/chat and /admin). */
+  :root { --font: "Tenor Sans", "Segoe UI", system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  html { background: var(--page); background-attachment: fixed; min-height: 100%; }
+  body { margin: 0; min-height: 100vh; color: var(--ink); font: 15px/1.5 var(--font); }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+  .hidden { display: none !important; }
+  .glass { position: relative; overflow: hidden; background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 22px;
+    box-shadow: inset 0 1px 0 var(--glass-inset), var(--glass-shadow); -webkit-backdrop-filter: blur(26px) saturate(170%); backdrop-filter: blur(26px) saturate(170%); }
+  .glass::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: linear-gradient(118deg, var(--sheen) 0%, rgba(255,255,255,0) 30%); }
+  .glass > * { position: relative; }
+  .mono { font-family: var(--mono); }
+  .dim { color: var(--ink2); }
+  .gw-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 12px 22px; border-radius: 18px; }
+  .gw-head h1 { margin: 0; font-size: 20px; letter-spacing: .14em; font-weight: 400; }
+  .gw-head .sub { color: var(--ink2); font-size: 13px; }
+  .gw-head .right { margin-left: auto; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .gw-field { background: var(--field); color: var(--field-ink); border: 1px solid var(--field-edge); border-radius: 12px; padding: 10px 14px; font: inherit; width: 100%; }
+  .gw-field::placeholder { color: var(--field-ink); opacity: .6; }
+  select.gw-field { width: auto; padding: 8px 12px; }
+  .gw-btn { height: 42px; padding: 0 22px; border-radius: 12px; border: 0; background: var(--btn); color: var(--btn-ink); box-shadow: var(--btn-shadow); font: inherit; cursor: pointer; white-space: nowrap; }
+  .gw-btn.ghost { background: var(--ghost); color: var(--ink); border: 1px solid var(--ghost-edge); box-shadow: none; height: 38px; padding: 0 14px; font-size: 13px; }
+  .gw-btn.danger { background: var(--tamper); color: var(--tamper-ink); border: 1px solid var(--tamper-edge); box-shadow: none; height: 32px; padding: 0 12px; font-size: 13px; }
+  .gw-btn:disabled { opacity: .55; cursor: default; }
+  .gw-err { color: var(--bad-ink); font-size: 14px; min-height: 20px; }
+  .gw-chip { font: 11px var(--mono); padding: 2px 8px; border-radius: 99px; border: 1px solid var(--tag-edge); color: var(--tag-ink); margin-right: 4px; display: inline-block; }
+  .gw-themes { display: flex; align-items: center; gap: 2px; padding: 2px 4px; border-radius: 999px; background: var(--ghost); box-shadow: inset 0 0 0 1px var(--rule); }
+  .gw-themes button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 999px; }
+  .gw-themes button span { display: block; width: 12px; height: 12px; border-radius: 999px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); }
+  .gw-themes button[aria-pressed="true"] span { outline: 1.5px solid var(--ink); outline-offset: 2px; }
+  .sw-auto { background: linear-gradient(135deg, #FF8A1F 0%, #F25C05 49.5%, #FFE0C0 50.5%, #FFB070 100%); }
+  .sw-orange-dark { background: radial-gradient(circle at 25% 20%, #FFB54D, rgba(255,181,77,0) 70%), radial-gradient(circle at 85% 90%, #D03400, rgba(208,52,0,0) 70%), #F25C05; }
+  .sw-orange-light { background: radial-gradient(circle at 25% 20%, #FFD2A1, rgba(255,210,161,0) 70%), radial-gradient(circle at 85% 90%, #FF9A4D, rgba(255,154,77,0) 70%), #FFEBD8; }
+  .sw-purple-dark { background: radial-gradient(circle at 25% 15%, #4A2799, rgba(74,39,153,0) 75%), #130A2C; }
+  .sw-purple-light { background: radial-gradient(circle at 25% 20%, #C9B6FF, rgba(201,182,255,0) 70%), radial-gradient(circle at 85% 90%, rgba(255,176,120,.7), rgba(255,176,120,0) 70%), #EEE8FF; }
+  .sw-sky { background: radial-gradient(circle at 25% 20%, #8FD0FF, rgba(143,208,255,0) 70%), radial-gradient(circle at 85% 90%, #BBB0FF, rgba(187,176,255,0) 70%), #E2F4FF; }
