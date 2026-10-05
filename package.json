@@ -15,6 +15,7 @@
     "mcp": "node --env-file-if-exists=.env src/mcp-serve.ts",
     "gateway": "node --env-file-if-exists=.env src/gateway-serve.ts",
     "staff": "node --env-file-if-exists=.env src/staff-cli.ts",
+    "vault": "node --env-file-if-exists=.env src/vault-cli.ts",
     "model": "node scripts/fetch-model.ts",
     "build:web": "node scripts/build-web.ts",
     "pretest": "node scripts/build-web.ts",

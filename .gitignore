@@ -157,3 +157,7 @@ web/app/demo-notes.json
 
 # Netlify CLI build output
 .netlify/
+
+# MSIX build output and the downloaded Windows SDK BuildTools
+packaging/msix/out/
+packaging/msix/tools/

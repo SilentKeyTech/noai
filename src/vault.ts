@@ -28,6 +28,12 @@ export interface OpenVault {
   data: Vault;
   /** in memory only, for the life of the process */
   masterKey: Buffer;
+  /**
+   * Set by secrets.ts just before it writes a change to the agent vault. Every
+   * other write keeps the secrets as they are on disk, so a long-running server
+   * never writes back a secret the owner removed from another window.
+   */
+  secretsChanged?: boolean;
 }
 
 export function vaultPathFor(root: string): string {
@@ -82,6 +88,16 @@ export async function openVault(root: string, passphrase: string): Promise<OpenV
 
 /** Atomic write: new file, then rename over the old one. */
 export async function writeVault(v: OpenVault): Promise<void> {
+  if (!v.secretsChanged && existsSync(v.path)) {
+    const disk = JSON.parse(await readFile(v.path, 'utf8')) as Vault;
+    if (disk.device?.publicKey === v.data.device.publicKey) {
+      if (disk.secrets) v.data.secrets = disk.secrets;
+      else delete v.data.secrets;
+      if (disk.mcpToken) v.data.mcpToken = disk.mcpToken;
+      else delete v.data.mcpToken;
+    }
+  }
+  v.secretsChanged = false;
   await mkdir(dirname(v.path), { recursive: true });
   const tmp = `${v.path}.${process.pid}.tmp`;
   await writeFile(tmp, `${JSON.stringify(v.data, null, 2)}\n`, { mode: 0o600 });

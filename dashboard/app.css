@@ -1,0 +1,31 @@
+/* The NOAI app's own pieces, on top of the Glass design in noai.css. */
+header .lid { width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0; }
+header .word { margin: 0; font: 300 22px/1 var(--font); letter-spacing: .32em; }
+header .say { margin-right: auto; }
+header .pill { margin-left: 0; }
+header .pill.on { background: var(--ok); border-color: var(--ok-edge); color: var(--ok-ink); font-weight: 600; }
+
+.gate { max-width: 520px; width: 100%; margin: 6vh auto 0; padding: 36px 36px 30px; text-align: left; gap: 14px; }
+.gate .lid-big { width: 72px; height: 72px; border-radius: 18px; box-shadow: 0 12px 30px rgba(0,0,0,.25); }
+.gate h2 { margin: 6px 0 0; font-size: 28px; font-weight: 700; letter-spacing: -.01em; }
+.gate .primary { margin-top: 6px; }
+
+.err { margin: 0; padding: 10px 14px; border-radius: 12px; background: var(--bad); border: 1px solid var(--bad-edge); color: var(--bad-ink); font-size: 13.5px; font-weight: 600; }
+.okmsg { margin: 0; padding: 10px 14px; border-radius: 12px; background: var(--ok); border: 1px solid var(--ok-edge); color: var(--ok-ink); font-size: 13.5px; font-weight: 600; }
+
+.keys { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.keys li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 14px 10px 14px 16px; border-radius: 14px; background: var(--sub); border: 1px solid var(--sub-edge); }
+.keys li .nm { font-weight: 700; font-size: 15.5px; }
+.keys li .forget { margin-left: auto; }
+.keys li.empty { border-style: dashed; background: transparent; color: var(--ink2); font-size: 14px; }
+.keys .chips { margin-top: 0; flex-basis: 100%; }
+
+.seg { display: flex; flex-wrap: wrap; gap: 8px; }
+.seg label, .check { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px; border-radius: 999px; background: var(--ghost); border: 1px solid var(--ghost-edge); font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.seg input, .check input { accent-color: var(--focus); }
+
+.steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14.5px; }
+.cmd { margin: 0; padding: 14px 16px; border-radius: 12px; background: var(--pre); border: 1px solid var(--pre-edge); color: var(--pre-ink); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+.verdict:not(.ok):not(.bad) { background: var(--sub); border: 1px solid var(--sub-edge); color: var(--ink2); }
+.card .top .out.no { color: var(--tamper-ink); }
+#tape:empty::before { background: none; padding: 6px 2px; content: "Nothing yet. Every time an agent uses a key, or tries to, it shows up here with its receipt."; display: block; padding: 6px 2px; color: var(--ink3); font-size: 13.5px; }

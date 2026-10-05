@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="shot.css"><title>NOAI shot 3</title></head><body><div class="frame">
+<div class="top"><img src="../assets/Square150x150Logo.scale-200.png" alt=""><span class="brand">NOAI AGENT VAULT</span></div>
+<h1>Sign a release without the <em>keystore sitting on disk.</em></h1>
+<p class="sub">The keystore and its password go to one program for one run, then are wiped. If the program prints the password, you see the placeholder.</p>
+<div class="term"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp; PowerShell</div>
+<pre><span class="c">&gt; noai-vault run --env STORE_PASSWORD=test_store_password --file KEYSTORE=test_upload_keystore -- keytool -list -keystore %KEYSTORE% -storepass:env STORE_PASSWORD</span>
+Keystore type: JKS
+Your keystore contains 1 entry
+upload, Oct 3, 2026, PrivateKeyEntry,
+Certificate fingerprint (SHA-256): D2:5E:82:A7:20:95:E6:18:27:8C:99:0C:24:1C:58:E8:87:3F:D1:A7:5E:39:17:CA:FE:E6:F6:FD:B5:C9:25:69
+<span class="ok">Receipt #0. The temporary key files were wiped.</span>
+
+<span class="c">&gt; noai-vault run --env STORE_PASSWORD=test_store_password -- node -e "console.log('pw is', process.env.STORE_PASSWORD)"</span>
+pw is <span class="ph">{{secret:test_store_password}}</span>
+<span class="ok">Receipt #1.</span></pre></div>
+<div class="note">Real output from a test run on 3 Oct 2026, with a throwaway test keystore and password. Commands shown in their Store form.</div>
+</div></body></html>
