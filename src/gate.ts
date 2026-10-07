@@ -1057,8 +1057,10 @@ export function bedrockApiKey(creds: AwsCredentials, region: string, now: Date =
   };
   if (creds.sessionToken) q['X-Amz-Security-Token'] = creds.sessionToken;
   const query = Object.keys(q).sort().map((k) => `${rfc3986(k)}=${rfc3986(q[k]!)}`).join('&');
-  // As AWS's own generator does it: a POST, presigned in the query, payload unsigned.
-  const canonicalRequest = ['POST', '/', query, `host:${host}`, '', 'host', 'UNSIGNED-PAYLOAD'].join('\n');
+  // As AWS's own generator does it (botocore SigV4QueryAuth): a POST presigned in
+  // the query, with the hash of the empty body. Checked against it on 7 Oct 2026.
+  const emptyHash = createHash('sha256').update('').digest('hex');
+  const canonicalRequest = ['POST', '/', query, `host:${host}`, '', 'host', emptyHash].join('\n');
   const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, createHash('sha256').update(canonicalRequest, 'utf8').digest('hex')].join('\n');
   let key: Buffer = createHmac('sha256', 'AWS4' + creds.secretAccessKey).update(day).digest();
   for (const part of [region, 'bedrock', 'aws4_request']) key = createHmac('sha256', key).update(part).digest();
