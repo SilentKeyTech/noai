@@ -292,7 +292,7 @@ export async function forwardChat(
   for (const c of (Array.isArray(json.choices) ? json.choices : []) as { message?: Record<string, unknown> }[]) {
     for (const k of ['content', 'reasoning_content']) {
       const val = c.message?.[k];
-      if (c.message && typeof val === 'string') c.message[k] = rehydrate(val, map);
+      if (c.message && typeof val === 'string') c.message[k] = rehydrate(k === 'content' ? dropThinking(val) : val, map);
     }
   }
   json.noai = { receiptId: signed.receipt.receiptId, seq: entry.seq, payloadHash: signed.receipt.payloadHash, redactions: counts };
@@ -376,6 +376,7 @@ export async function forwardChatStream(
   const controller = new AbortController();
   const timer = cfg.timeoutMs ? setTimeout(() => controller.abort(), cfg.timeoutMs) : null;
   const rehydrator = new StreamRehydrator(map);
+  const thinking = new ThinkingFilter();
   let raw = '';
   let finishReason: string | null = null;
   try {
@@ -410,7 +411,7 @@ export async function forwardChatStream(
       const piece = typeof c?.delta?.content === 'string' ? c.delta.content : '';
       if (!piece) return;
       raw += piece;
-      const out = rehydrator.push(piece);
+      const out = rehydrator.push(thinking.push(piece));
       if (out) onPiece(out);
     };
     try {
@@ -424,7 +425,7 @@ export async function forwardChatStream(
         }
       }
       line(pending.trim());
-      const rest = rehydrator.flush();
+      const rest = rehydrator.push(thinking.flush()) + rehydrator.flush();
       if (rest) onPiece(rest);
     } catch (e) {
       const timedOut = controller.signal.aborted;
@@ -1018,6 +1019,66 @@ export async function runWithSecrets(v: OpenVault, root: string, req: RunRequest
   // 4. receipt
   if (failure) return { code: null, outcome: 'error', reason: failure, tempDir, ...(await receiptFor('error', null, failure)) };
   return { code, outcome: 'sent', tempDir, ...(await receiptFor('sent', code)) };
+}
+
+// ---------------------------------------------------------------------------
+// A model's private notes. Some open models (gpt-oss on Bedrock) put their
+// working in <reasoning>...</reasoning> or <think>...</think> before the answer.
+// The person reads only the answer; the receipt keeps every byte.
+// ---------------------------------------------------------------------------
+
+export class ThinkingFilter {
+  private buf = '';
+  private inside: string | null = null;
+
+  push(text: string): string {
+    this.buf += text;
+    let out = '';
+    for (;;) {
+      if (this.inside) {
+        const close = `</${this.inside}>`;
+        const end = this.buf.indexOf(close);
+        if (end < 0) {
+          // Keep only what could still be the start of the closing tag.
+          this.buf = this.buf.slice(Math.max(0, this.buf.length - (close.length - 1)));
+          return out;
+        }
+        this.buf = this.buf.slice(end + close.length).replace(/^\s+/, '');
+        this.inside = null;
+        continue;
+      }
+      const open = /<(reasoning|think)>/.exec(this.buf);
+      if (open) {
+        out += this.buf.slice(0, open.index);
+        this.buf = this.buf.slice(open.index + open[0].length);
+        this.inside = open[1]!;
+        continue;
+      }
+      // Hold back a "<rea" that may become "<reasoning>" in the next piece.
+      const lt = this.buf.lastIndexOf('<');
+      if (lt >= 0 && /^<[a-z]{0,9}$/.test(this.buf.slice(lt))) {
+        out += this.buf.slice(0, lt);
+        this.buf = this.buf.slice(lt);
+        return out;
+      }
+      out += this.buf;
+      this.buf = '';
+      return out;
+    }
+  }
+
+  /** The end of the reply: anything held back was plain text, unless it was inside the notes. */
+  flush(): string {
+    const rest = this.inside ? '' : this.buf;
+    this.buf = '';
+    this.inside = null;
+    return rest;
+  }
+}
+
+export function dropThinking(text: string): string {
+  const f = new ThinkingFilter();
+  return f.push(text) + f.flush();
 }
 
 // ---------------------------------------------------------------------------
