@@ -181,6 +181,108 @@ function redactStructured(input: string, ph: Placeholders): string {
   return orig;
 }
 
+// ---------------------------------------------------------------- companies
+
+/**
+ * A company is found by its legal form: Sandpiper Fitout Co., Harbourline
+ * Contracting LLC, شركة الرمال للمقاولات. Once found, the name without the form
+ * ("Sandpiper Fitout") and its first word when that word is distinctive
+ * ("Sandpiper") are hidden everywhere under the same placeholder, because a
+ * contract names a party in full once and then by a short name.
+ *
+ * "The Company", "the Group" and "the Contractor" stay readable: they are the
+ * defined terms a contract question is about, and they name no one.
+ */
+const LEGAL_FORM = String.raw`(?:Co\.|Company|Corp\.?|Corporation|Inc\.?|Incorporated|L\.?L\.?C\.?|Ltd\.?|Limited|PLC|LLP|GmbH|FZE|FZ-LLC|FZCO|Est\.|Establishment|Holdings?|Group)`;
+const COMPANY_LATIN = new RegExp(String.raw`\b[A-Z][\w'’-]*(?:\s+(?:[A-Z][\w'’-]*|&|and)){0,5}?\s+${LEGAL_FORM}(?:\s+${LEGAL_FORM})?(?![\w])`, 'g');
+const COMPANY_ARABIC_LEAD = /(?<![\p{L}])(?:شركة|مؤسسة|مجموعة)\s+/gu;
+
+/** Words that open a name without being part of it, and words too common to stand for one company. */
+const COMPANY_LEAD = new Set(['the', 'this', 'that', 'such', 'said', 'any', 'each', 'a', 'an', 'our', 'your', 'their', 'his', 'her', 'my', 'its', 'every', 'other']);
+const COMPANY_GENERIC = new Set([
+  'saudi', 'arabia', 'arabian', 'national', 'international', 'gulf', 'global', 'united', 'general', 'middle', 'east', 'west', 'north', 'south',
+  'al', 'first', 'new', 'royal', 'advanced', 'modern', 'trading', 'contracting', 'services', 'service', 'group', 'holding', 'holdings',
+  'company', 'contractor', 'subcontractor', 'client', 'employer', 'supplier', 'buyer', 'seller', 'party', 'parties', 'owner', 'consultant',
+  'riyadh', 'jeddah', 'dammam', 'kingdom', 'arab', 'emirates', 'dubai', 'technology', 'technologies', 'solutions', 'industrial', 'industries',
+]);
+
+const COMPANY_GENERIC_ARABIC = new Set(['السعودية', 'العربية', 'الوطنية', 'الدولية', 'المتحدة', 'الخليج', 'الخليجية', 'العامة', 'المتقدمة', 'الحديثة', 'الأولى', 'الاولى', 'للتجارة', 'للمقاولات', 'للخدمات']);
+
+interface Company {
+  surface: string;
+  /** shorter ways the same company is written later */
+  short: string[];
+}
+
+function findCompanies(text: string): Company[] {
+  const out: Company[] = [];
+  for (const m of text.matchAll(COMPANY_LATIN)) {
+    let words = m[0].split(/\s+/);
+    while (words.length > 1 && COMPANY_LEAD.has(words[0]!.toLowerCase())) words = words.slice(1);
+    const core = words.slice(0, -1).filter((w) => w !== '&' && w !== 'and');
+    // "The Company", "the Group": a defined term, not a name.
+    if (!core.some((w) => !COMPANY_GENERIC.has(w.toLowerCase()) && !STOP_LATIN.has(normToken(w)))) continue;
+    const surface = words.join(' ');
+    const short: string[] = [];
+    const name = words.slice(0, -1).join(' ');
+    if (name.includes(' ')) short.push(name);
+    const first = core[0]!;
+    if (first.length >= 4 && !COMPANY_GENERIC.has(first.toLowerCase()) && !STOP_LATIN.has(normToken(first)) && !GIVEN_LATIN.has(normToken(first))) short.push(first);
+    out.push({ surface, short });
+  }
+  for (const m of text.matchAll(COMPANY_ARABIC_LEAD)) {
+    // The first word after شركة is the name; later words join only when they read
+    // as part of it: الرمال, للمقاولات, السعودية. A verb or a function word ends it.
+    const rest = text.slice(m.index + m[0].length);
+    const words: string[] = [];
+    for (const w of rest.matchAll(/[؀-ۿـ]+|[^؀-ۿـ]+/g)) {
+      const t = w[0];
+      if (!/^[؀-ۿـ]+$/.test(t)) {
+        if (/^[ \t ]+$/.test(t) && words.length < 4) continue;
+        break;
+      }
+      const n = normToken(t);
+      if (STOP_ARABIC.has(n)) break;
+      if (words.length > 0 && !n.startsWith('ال') && !n.startsWith('لل')) break;
+      words.push(t);
+      if (words.length === 4) break;
+    }
+    if (words.length === 0) continue;
+    const name = words.join(' ');
+    const short = [name];
+    const first = normToken(words[0]!);
+    if (words.length > 1 && first.length >= 5 && !COMPANY_GENERIC_ARABIC.has(first)) short.push(words[0]!);
+    out.push({ surface: `${m[0]}${name}`, short });
+  }
+  return out;
+}
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function redactCompanies(texts: string[], ph: Placeholders): string[] {
+  // The full name found anywhere numbers the company; its short forms point at it.
+  const owner = new Map<string, string | null>();
+  const full: string[] = [];
+  for (const t of texts) {
+    for (const c of findCompanies(t)) {
+      if (!owner.has(c.surface)) full.push(c.surface);
+      owner.set(c.surface, c.surface);
+      for (const s of c.short) owner.set(s, owner.has(s) && owner.get(s) !== c.surface ? null : c.surface);
+    }
+  }
+  if (full.length === 0) return texts;
+  // Longest first, so "Sandpiper Fitout Co." is taken before "Sandpiper". A short
+  // form shared by two companies stays readable rather than point at the wrong one.
+  const forms = [...owner.entries()].filter((e): e is [string, string] => e[1] !== null).sort((a, b) => b[0].length - a[0].length);
+  const re = new RegExp(forms.map(([f]) => `(?<![\\p{L}\\p{N}])${escapeRe(f)}(?![\\p{L}\\p{N}])`).join('|'), 'gu');
+  return texts.map((text) =>
+    text.replace(re, (seen) => {
+      const company = owner.get(seen)!;
+      return ph.get('COMPANY', company, company);
+    }),
+  );
+}
+
 // ---------------------------------------------------------------- names
 
 interface Token {
@@ -415,7 +517,8 @@ function redactNames(texts: string[], ph: Placeholders, people: string[], same: 
 export function redactAll(texts: string[], opts: RedactOptions = {}): { texts: string[]; counts: Record<string, number>; map: Map<string, string> } {
   const ph = new Placeholders();
   const structured = texts.map((t) => redactStructured(t, ph));
-  const out = redactNames(structured, ph, opts.people ?? [], opts.same ?? []);
+  const companies = redactCompanies(structured, ph);
+  const out = redactNames(companies, ph, opts.people ?? [], opts.same ?? []);
   return { texts: out, counts: ph.counts, map: ph.map };
 }
 
