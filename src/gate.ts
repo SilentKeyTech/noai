@@ -25,7 +25,7 @@ import { signDisclosure, signSecretUse } from './ledger.ts';
 import { type OpenVault, storeDisclosure, unwrapPrivateKey } from './vault.ts';
 import { canonical, scrub } from './crypto.ts';
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -110,6 +110,12 @@ export interface GatewayConfig {
   /** ceiling on the forwarded body in bytes; chat history is bigger than one question */
   maxPayloadBytes: number;
   timeoutMs: number;
+  /**
+   * Where a fresh upstream key comes from, when there is no saved one. Set by
+   * NOAI_GATEWAY_KEY=aws-role: the AWS server's own role signs a short-lived
+   * Bedrock key. apiKey then only says that a source is set.
+   */
+  keySource?: () => Promise<string>;
 }
 
 export function gatewayConfigFromEnv(root: string): GatewayConfig {
@@ -121,6 +127,7 @@ export function gatewayConfigFromEnv(root: string): GatewayConfig {
     model: base.model,
     maxPayloadBytes: Number(process.env.NOAI_GATEWAY_MAX_PAYLOAD ?? 200_000),
     timeoutMs: Number(process.env.NOAI_GATEWAY_TIMEOUT_MS ?? 120_000),
+    ...(process.env.NOAI_GATEWAY_KEY === 'aws-role' ? { keySource: awsRoleKeySource(process.env.AWS_REGION ?? 'eu-north-1') } : {}),
   };
 }
 
@@ -258,7 +265,7 @@ export async function forwardChat(
   let res: Awaited<ReturnType<Transport>>;
   let text: string;
   try {
-    res = await transport(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` }, body, signal: controller.signal });
+    res = await transport(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.keySource ? await cfg.keySource() : cfg.apiKey}` }, body, signal: controller.signal });
     text = await res.text();
   } catch (e) {
     const timedOut = controller.signal.aborted;
@@ -374,7 +381,7 @@ export async function forwardChatStream(
   try {
     let res: Awaited<ReturnType<StreamTransport>>;
     try {
-      res = await transport(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` }, body, signal: controller.signal });
+      res = await transport(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.keySource ? await cfg.keySource() : cfg.apiKey}` }, body, signal: controller.signal });
     } catch (e) {
       const timedOut = controller.signal.aborted;
       await receiptFor('', timedOut ? 'timeout' : 'error');
@@ -1011,4 +1018,90 @@ export async function runWithSecrets(v: OpenVault, root: string, req: RunRequest
   // 4. receipt
   if (failure) return { code: null, outcome: 'error', reason: failure, tempDir, ...(await receiptFor('error', null, failure)) };
   return { code, outcome: 'sent', tempDir, ...(await receiptFor('sent', code)) };
+}
+
+// ---------------------------------------------------------------------------
+// AWS role key. On an AWS server the gateway keeps no saved key: the server's
+// own role (its instance profile) signs a Bedrock API key that lasts at most
+// as long as the role's credentials, and a new one is signed before that.
+// Nothing is written to disk. The credentials come from the instance metadata
+// service (IMDSv2), or from AWS_ACCESS_KEY_ID and friends when those are set.
+// ---------------------------------------------------------------------------
+
+export interface AwsCredentials {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+  /** ms since epoch */
+  expiration?: number;
+}
+
+const rfc3986 = (s: string): string => encodeURIComponent(s).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+
+/**
+ * A Bedrock API key in the same form as AWS's own token generator: a SigV4
+ * presigned CallWithBearerToken request, base64 encoded behind "bedrock-api-key-".
+ */
+export function bedrockApiKey(creds: AwsCredentials, region: string, now: Date = new Date(), expiresIn = 43200): string {
+  const host = 'bedrock.amazonaws.com';
+  const amzDate = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const day = amzDate.slice(0, 8);
+  const scope = `${day}/${region}/bedrock/aws4_request`;
+  const q: Record<string, string> = {
+    Action: 'CallWithBearerToken',
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': `${creds.accessKeyId}/${scope}`,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(expiresIn),
+    'X-Amz-SignedHeaders': 'host',
+  };
+  if (creds.sessionToken) q['X-Amz-Security-Token'] = creds.sessionToken;
+  const query = Object.keys(q).sort().map((k) => `${rfc3986(k)}=${rfc3986(q[k]!)}`).join('&');
+  const emptyHash = createHash('sha256').update('').digest('hex');
+  const canonicalRequest = ['GET', '/', query, `host:${host}`, '', 'host', emptyHash].join('\n');
+  const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, createHash('sha256').update(canonicalRequest, 'utf8').digest('hex')].join('\n');
+  let key: Buffer = createHmac('sha256', 'AWS4' + creds.secretAccessKey).update(day).digest();
+  for (const part of [region, 'bedrock', 'aws4_request']) key = createHmac('sha256', key).update(part).digest();
+  const signature = createHmac('sha256', key).update(toSign, 'utf8').digest('hex');
+  return 'bedrock-api-key-' + Buffer.from(`${host}/?${query}&X-Amz-Signature=${signature}&Version=1`, 'utf8').toString('base64');
+}
+
+const IMDS = 'http://169.254.169.254/latest';
+
+/** A plain request to the instance metadata service; a GET carries no body. */
+export type MetadataFetch = (url: string, init: { method: 'GET' | 'PUT'; headers: Record<string, string>; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+const metadataFetch: MetadataFetch = (url, init) => fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(2000) });
+
+/** The role credentials of this AWS server, or the ones in the environment. */
+export async function awsCredentials(get$: MetadataFetch = metadataFetch): Promise<AwsCredentials> {
+  const env = process.env;
+  if (env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY) {
+    return { accessKeyId: env.AWS_ACCESS_KEY_ID, secretAccessKey: env.AWS_SECRET_ACCESS_KEY, ...(env.AWS_SESSION_TOKEN ? { sessionToken: env.AWS_SESSION_TOKEN } : {}) };
+  }
+  const get = async (path: string, token: string): Promise<string> => {
+    const r = await get$(`${IMDS}${path}`, { method: 'GET', headers: { 'x-aws-ec2-metadata-token': token } });
+    if (!r.ok) throw new GatewayError(`The server's AWS role could not be read (${String(r.status)}). Nothing was sent.`, 503);
+    return r.text();
+  };
+  const t = await get$(`${IMDS}/api/token`, { method: 'PUT', headers: { 'x-aws-ec2-metadata-token-ttl-seconds': '21600' } }).catch(() => null);
+  if (!t?.ok) throw new GatewayError('This is not an AWS server with a role, so NOAI_GATEWAY_KEY=aws-role cannot work. Nothing was sent.', 503);
+  const token = await t.text();
+  const role = (await get('/meta-data/iam/security-credentials/', token)).split('\n')[0]?.trim() ?? '';
+  if (!role) throw new GatewayError('This AWS server has no role attached. Nothing was sent.', 503);
+  const c = JSON.parse(await get(`/meta-data/iam/security-credentials/${role}`, token)) as { AccessKeyId: string; SecretAccessKey: string; Token: string; Expiration: string };
+  return { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.Token, expiration: Date.parse(c.Expiration) };
+}
+
+/** A key source that signs a new Bedrock key when the last one is half an hour old or its credentials are about to run out. */
+export function awsRoleKeySource(region: string, get$: MetadataFetch = metadataFetch, now: () => number = Date.now): () => Promise<string> {
+  let cached: { key: string; renewAt: number } | null = null;
+  return async () => {
+    if (cached && now() < cached.renewAt) return cached.key;
+    const creds = await awsCredentials(get$);
+    const t = now();
+    const left = creds.expiration ? Math.max(0, Math.floor((creds.expiration - t) / 1000) - 60) : 43200;
+    const key = bedrockApiKey(creds, region, new Date(t), Math.min(43200, Math.max(60, left)));
+    cached = { key, renewAt: Math.min(t + 30 * 60_000, creds.expiration ? creds.expiration - 5 * 60_000 : Infinity) };
+    return key;
+  };
 }
