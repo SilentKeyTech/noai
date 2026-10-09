@@ -53,8 +53,34 @@ export function defaultKdf(): KdfParams {
   };
 }
 
+const isPow2 = (n: number): boolean => Number.isInteger(n) && n > 1 && (n & (n - 1)) === 0;
+
+/**
+ * The KDF parameters come from the vault file, so they are untrusted input.
+ * Reject anything scrypt would choke on, anything that would hand us a key of
+ * the wrong size, and anything that would blow past the memory cap, each with
+ * a message a person can act on instead of an OpenSSL error code.
+ */
+export function validateKdf(kdf: unknown): KdfParams {
+  const bad: (why: string) => never = (why) => {
+    throw new Error(`The vault's key derivation settings are not usable: ${why}.`);
+  };
+  if (!kdf || typeof kdf !== 'object') bad('missing');
+  const k = kdf as Partial<KdfParams>;
+  if (k.algorithm !== 'scrypt') bad(`unknown algorithm ${JSON.stringify(k.algorithm)}`);
+  if (typeof k.salt !== 'string' || unb64(k.salt).length < 16) bad('salt is missing or too short');
+  const { N, r, p } = k;
+  if (typeof N !== 'number' || !isPow2(N)) bad('N must be a power of two');
+  if (typeof r !== 'number' || !Number.isInteger(r) || r < 1) bad('r must be a positive integer');
+  if (typeof p !== 'number' || !Number.isInteger(p) || p < 1) bad('p must be a positive integer');
+  if (k.keyLength !== KEY_BYTES) bad(`keyLength must be ${String(KEY_BYTES)}`);
+  if (128 * N * r > SCRYPT_MAXMEM) bad('N and r need more memory than this build allows');
+  return k as KdfParams;
+}
+
 /** Turn a passphrase into the key encryption key that wraps the master key. */
 export function deriveKek(passphrase: string, kdf: KdfParams): Buffer {
+  validateKdf(kdf);
   return scryptSync(passphrase.normalize('NFKC'), unb64(kdf.salt), kdf.keyLength, {
     N: kdf.N,
     r: kdf.r,
@@ -71,13 +97,41 @@ export function seal(key: Buffer, plaintext: Buffer, aad?: Buffer): Sealed {
   return { iv: b64(iv), tag: b64(cipher.getAuthTag()), ct: b64(ct) };
 }
 
+export function isSealed(value: unknown): value is Sealed {
+  const s = value as Partial<Sealed> | null;
+  return (
+    !!s &&
+    typeof s === 'object' &&
+    typeof s.iv === 'string' &&
+    typeof s.tag === 'string' &&
+    typeof s.ct === 'string'
+  );
+}
+
 export function open(key: Buffer, sealed: Sealed, aad?: Buffer): Buffer {
   const decipher = createDecipheriv(CIPHER, key, unb64(sealed.iv), {
     authTagLength: TAG_BYTES,
   });
   decipher.setAuthTag(unb64(sealed.tag));
   if (aad) decipher.setAAD(aad);
-  return Buffer.concat([decipher.update(unb64(sealed.ct)), decipher.final()]);
+  return joinChunks(decipher.update(unb64(sealed.ct)), decipher.final());
+}
+
+/**
+ * Hand back decrypted output in one buffer the caller can scrub.
+ *
+ * GCM is a stream mode, so update() returns every byte and final() returns
+ * none, and the update() buffer is the one the caller gets. If final() ever
+ * does return bytes, the two are copied into one buffer and the originals are
+ * zeroed on the spot, because a secret in a buffer nobody holds a reference
+ * to is not gone, it is waiting for the allocator to hand the memory out
+ * again. Scanning the process after closeVault found a content key that way.
+ */
+function joinChunks(head: Buffer, tail: Buffer): Buffer {
+  if (tail.length === 0) return head;
+  const out = Buffer.concat([head, tail]);
+  scrub(head, tail);
+  return out;
 }
 
 /** Raw stream encryption for file bodies, where the IV and tag travel in the blob header. */
@@ -100,7 +154,7 @@ export function decryptBody(
 ): Buffer {
   const decipher = createDecipheriv(CIPHER, cek, iv, { authTagLength: TAG_BYTES });
   decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  return joinChunks(decipher.update(ciphertext), decipher.final());
 }
 
 export function newSigningPair(): { publicKey: Buffer; privateKey: Buffer } {
