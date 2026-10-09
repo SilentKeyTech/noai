@@ -172,4 +172,6 @@ export interface LedgerEntry {
   payloadBytes: number;
   signature: string;
   entryHash: string;
+  /** set by readLedger, in memory only, for a line on disk that does not parse; never written */
+  damaged?: true;
 }

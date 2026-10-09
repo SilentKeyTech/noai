@@ -4,6 +4,7 @@
  * what it was sent. No network.
  */
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,7 @@ import { sha256 } from '../src/crypto.ts';
 import { type GatewayConfig, type Transport } from '../src/gate.ts';
 import { createGatewayServer, parseTokens } from '../src/gateway-serve.ts';
 import { readLedger, readReceipts, verifyLedger } from '../src/ledger.ts';
+import { addStaff, revokeStaff } from '../src/staff.ts';
 import { addNote, createVault, readDisclosure } from '../src/vault.ts';
 
 const dirs: string[] = [];
@@ -251,5 +253,77 @@ describe('the gateway keeps its record when things go wrong', () => {
 describe('tokens', () => {
   it('refuses a short secret at start-up', () => {
     assert.throws(() => parseTokens('amal:short'), /shorter than 24/);
+  });
+});
+
+describe('audit of 9 Oct 2026: what must never leave the gateway', () => {
+  const JWT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+  const PAT = 'github_pat_11ABCDEFG0abcdefghijkl_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2W3x4Y5z6A7b8C9d';
+  const GOOGLE = 'AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBxY';
+  const PEM = '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n-----END RSA PRIVATE KEY-----';
+
+  it('hides every kind, the ones the audit added included, before a byte is forwarded, and gives it all back', async () => {
+    const values = { email: 'sami@example.com', phone: '055\u2013123\u20134567', jwt: JWT, pat: PAT, google: GOOGLE, iban: 'sa0380000000608010167519', known: 'Zor\u200Bvath', surname: 'Al-Rashid' };
+    const fragments = ['sami@', '4567', 'SflKxw', 'A1b2C3d4', 'FMBxY', '608010167519', 'Zorvath', 'Zor\u200Bvath', 'Rashid', 'MIIEow'];
+    const p = provider((body) => {
+      for (const f of fragments) if (body.includes(f)) throw new Error(`${f} reached the provider`);
+      return echo(body);
+    });
+    const g = await start(p);
+    try {
+      await addNote(g.vault, 'People', 'My accountant is Zorvath Quell.');
+      const text = `Mail ${values.email}, call ${values.phone}, token ${values.jwt}, ${values.pat}, ${values.google}, iban ${values.iban}, key\n${PEM}\nask ${values.known} and ${values.surname}.`;
+      const res = await g.call('/v1/chat/completions', { body: chat(text) });
+      assert.equal(res.status, 200, await res.clone().text());
+      assert.equal(p.sent.length, 1);
+      for (const f of fragments) assert.ok(!p.sent[0]!.includes(f), `${f} left the machine`);
+      const out = (await res.json()) as { choices: { message: { content: string } }[] };
+      // A short form of a person the vault knows comes back as the full name, as it always has.
+      assert.equal(out.choices[0]!.message.content, `You wrote: ${text.replace(values.known, 'Zorvath Quell')}`, 'the staff member reads the real text back, as typed');
+      const receipts = await readReceipts(g.root);
+      assert.deepEqual(Object.keys(receipts[0]!.receipt.redactions).sort(), ['EMAIL', 'IBAN', 'PERSON', 'PHONE', 'SECRET']);
+      assert.equal(receipts[0]!.receipt.redactions.SECRET, 4);
+      assert.equal(readDisclosure(g.vault, receipts[0]!.receipt.receiptId), p.sent[0]);
+    } finally {
+      await g.close();
+    }
+  });
+
+  it('sends nothing upstream and writes nothing on disk when the token is missing, wrong, revoked or in another scheme', async () => {
+    const p = provider(() => {
+      throw new Error('the provider was called');
+    });
+    const g = await start(p);
+    try {
+      const revoked = (await addStaff(g.root, 'lina')).token;
+      await revokeStaff(g.root, 'lina');
+      const body = chat('Mail sami@example.com');
+      const attempts: { token?: string | null; headers?: Record<string, string> }[] = [
+        { token: null },
+        { token: '' },
+        { token: 'x'.repeat(TOKEN_A.length) },
+        { token: TOKEN_A.toUpperCase() },
+        { token: revoked },
+        { headers: { authorization: `Basic ${TOKEN_A}` } },
+        { headers: { authorization: `bearer${TOKEN_A}` } },
+        { headers: { authorization: `Bearer ${TOKEN_A} ${TOKEN_B}` } },
+      ];
+      for (const a of attempts) {
+        const res = await g.call('/v1/chat/completions', { ...a, body });
+        assert.equal(res.status, 401, JSON.stringify(a));
+        assert.equal(res.headers.get('www-authenticate'), 'Bearer realm="noai"');
+        const stream = await g.call('/v1/chat/completions', { ...a, body: { ...body, stream: true } });
+        assert.equal(stream.status, 401, `streaming ${JSON.stringify(a)}`);
+      }
+      assert.equal(p.sent.length, 0);
+      assert.equal(existsSync(join(g.root, 'ledger.jsonl')), false, 'a ledger was started');
+      assert.equal(existsSync(join(g.root, 'receipts.jsonl')), false, 'a receipt was written');
+      assert.equal(readDisclosure(g.vault, 'anything'), null);
+      const ok = await g.call('/v1/chat/completions', { body });
+      assert.equal(ok.status, 502, 'with the right token the call reaches the provider, which this test made fail');
+      assert.equal(p.sent.length, 1);
+    } finally {
+      await g.close();
+    }
   });
 });

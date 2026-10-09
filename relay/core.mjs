@@ -49,6 +49,7 @@ export function refuse(body) {
   } catch {
     return 'Not JSON.';
   }
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return 'Not a NOAI disclosure.';
   if (!MODELS.has(j.model)) return 'Model not allowed.';
   if (!Number.isInteger(j.max_tokens) || j.max_tokens < 1 || j.max_tokens > MAX_TOKENS) return 'max_tokens out of range.';
   const m = j.messages;
