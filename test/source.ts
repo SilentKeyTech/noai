@@ -14,13 +14,15 @@ export interface Source {
   imports: Map<string, string[]>;
   /** every string and template literal, for require() and import() */
   strings: Set<string>;
+  /** code that reaches for a name it does not spell out: import() of a computed specifier, a computed property of globalThis */
+  computed: string[];
 }
 
 export function readSource(path: string | URL): Source {
   const file = path instanceof URL ? path.pathname : path;
   const kind = /\.m?js$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
   const sf = ts.createSourceFile(file, readFileSync(path, 'utf8'), ts.ScriptTarget.ES2022, true, kind);
-  const out: Source = { identifiers: new Map(), imports: new Map(), strings: new Set() };
+  const out: Source = { identifiers: new Map(), imports: new Map(), strings: new Set(), computed: [] };
   const bump = (name: string): void => void out.identifiers.set(name, (out.identifiers.get(name) ?? 0) + 1);
   const walk = (node: ts.Node): void => {
     if (ts.isIdentifier(node)) bump(node.text);
@@ -40,6 +42,13 @@ export function readSource(path: string | URL): Source {
     }
     if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier) && !node.isTypeOnly) {
       out.imports.set(node.moduleSpecifier.text, [...(out.imports.get(node.moduleSpecifier.text) ?? []), '*']);
+    }
+    const literal = (n: ts.Node | undefined): boolean => !!n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n));
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && !literal(node.arguments[0])) out.computed.push('import() of a computed specifier');
+    if (ts.isPropertyAccessExpression(node) && ts.isMetaProperty(node.expression) && node.name.text === 'resolve') out.computed.push('import.meta.resolve');
+    if (ts.isElementAccessExpression(node) && !literal(node.argumentExpression)) {
+      const target = node.expression.getText();
+      if (/^(?:\(.*\))?\s*(?:globalThis|window|self|global)\b/.test(target) || /\bas any\)$/.test(target)) out.computed.push(`computed property of ${target.replace(/\s+/g, ' ')}`);
     }
     ts.forEachChild(node, walk);
   };

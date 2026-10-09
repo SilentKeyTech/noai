@@ -246,7 +246,7 @@ git clone https://github.com/SilentKeyTech/noai && cd noai
 npm install                     # the four runtime dependencies, plus typescript for dev
 npm run model                   # one time: fetch the 23 MB embedding model, hash checked
 echo NEBIUS_API_KEY=your_key > .env
-npm test                        # 240 tests, no network
+npm test                        # 413 tests, no network
 npm run serve                   # http://127.0.0.1:7788
 ```
 

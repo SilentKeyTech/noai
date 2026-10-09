@@ -17,10 +17,12 @@
  *    add the people the vault already knows (src/people.ts), so a name pointed
  *    at in one note is hidden in another where nothing points at it.
  *
- * Matching runs on the text with invisible characters (zero width space and
- * the like) taken out, so "Sa\u200Bmi" is still Sami. The output keeps every
- * character the owner typed outside a hidden value, and a placeholder maps
- * back to the value exactly as it was written.
+ * Matching runs on the text with invisible characters (zero width space, bidi
+ * marks and the like) taken out, so "Sa\u200Bmi" is still Sami, and again with
+ * each of them read as a space, so "Sami\u200BHaddad" is still two words. What
+ * either reading finds is hidden. The output keeps every character the owner
+ * typed outside a hidden value; a placeholder maps back to a structured value
+ * as it was written, and to a name without the invisible characters.
  *
  * A placeholder the owner typed, say a literal [PHONE_1] in a note, is never
  * mapped to anything, and no generated placeholder takes its name.
@@ -40,6 +42,7 @@ import {
   LEAD_ARABIC,
   LEAD_LATIN,
   PLACE_AFTER_LATIN,
+  PLACE_AL,
   PLACE_BEFORE_ARABIC,
   PLACE_BEFORE_LATIN,
   POSSESSIVE_LATIN,
@@ -52,8 +55,12 @@ interface Rule {
   kind: string;
   pattern: RegExp;
   accept?: (m: string) => boolean;
+  /** when accept says no: a shorter start of the match that is a value, or null. An IBAN typed in lower case can take the word after it. */
+  shrink?: (m: string) => string | null;
   /** what makes two matches the same value, when not the text itself: a phone is its digits */
   key?: (m: string) => string;
+  /** a match to leave readable and keep later rules out of: a certificate, which is public but looks like a key */
+  keep?: boolean;
 }
 
 function luhn(digits: string): boolean {
@@ -124,14 +131,31 @@ const MEDICAL = new RegExp(String.raw`(?<![\p{L}])(?:${MEDICAL_TERMS})(?![\p{L}]
  * required on purpose: a check digit we got wrong would let a real ID through,
  * and hiding a ten digit number that was not an ID costs almost nothing.
  */
+const IBAN = /\b[A-Za-z]{2}\d{2}(?: ?[A-Za-z0-9]{4}){3,7}(?: ?[A-Za-z0-9]{1,4})?\b/g;
+/** An IBAN in capitals is hidden on sight. One with a lower case letter in it must check out, and may have taken the word after it. */
+const ibanOk = (m: string): boolean => !/[a-z]/.test(m) || ibanChecks(m);
+function ibanShrink(m: string): string | null {
+  const parts = m.split(' ');
+  while (parts.length > 1) {
+    parts.pop();
+    const s = parts.join(' ');
+    if (new RegExp(`^${IBAN.source.slice(2, -2)}$`).test(s) && ibanOk(s)) return s;
+  }
+  return null;
+}
+
 const RULES: Rule[] = [
-  // A private key in PEM armour, BEGIN to END, however many lines. A certificate is public and stays.
-  { kind: 'SECRET', pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g },
-  // API keys and tokens by their prefix: GitHub classic and fine grained, Google, Slack, AWS, Stripe-style, and a JWT (header.payload.signature, the first two JSON objects in base64url).
-  { kind: 'SECRET', pattern: /\b(?:github_pat_[A-Za-z0-9_]{30,}|AIza[\w-]{35}(?![\w-])|eyJ[\w-]{8,}\.ey[\w-]{8,}\.[\w-]{10,}(?![\w-])|(?:sk|pk|rk|ghp|gho|xox[bap]|AKIA)[-_A-Za-z0-9]{16,}\b)/g },
+  // A private key in PEM or PGP armour, BEGIN to END, however many lines. With the END line missing, the lines of base64 and headers that follow BEGIN.
+  // It runs before the certificate rule below: a certificate body cannot hold a BEGIN line, so a key inside or after one is a key.
+  { kind: 'SECRET', pattern: /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|[ \t]*(?:\r?\n(?:[A-Za-z0-9+/=]{16,}|[A-Za-z-]+: ?[^\r\n]*|=[A-Za-z0-9+/]{4}|(?=\r?\n))[ \t]*)*)/g },
+  // A certificate or a public key in armour is public. It stays, and the key body rule below does not read into it. It ends on its own END line and never crosses a BEGIN line.
+  { kind: 'KEEP', pattern: /-----BEGIN ((?:[A-Z]+ )*(?:CERTIFICATE|PUBLIC KEY)(?: BLOCK)?)-----(?:(?!-----BEGIN )[\s\S])*?-----END \1-----/g, keep: true },
+  // A key body with no armour: DER in base64 starts MII, an OpenSSH key starts with "openssh-key-v1" in base64. Lines of base64 that follow belong to it.
+  { kind: 'SECRET', pattern: /\b(?:MII[A-Za-z0-9+/=]{60,}|b3BlbnNzaC1rZXktdjE[A-Za-z0-9+/=]{20,})(?:\r?\n[A-Za-z0-9+/=]{16,})*/g },
+  // API keys and tokens by their prefix: GitHub classic and fine grained, Google, Slack, AWS, Stripe-style, and a JWT or JWE (a base64url JSON header, then two to four more parts, or one more and an empty signature).
+  { kind: 'SECRET', pattern: /\b(?:github_pat_[A-Za-z0-9_]{30,}|AIza[\w-]{35}(?![\w-])|eyJ[\w-]{8,}\.[\w-]{8,}(?:(?:\.[\w-]+){1,3}|\.)(?![\w-])|(?:sk|pk|rk|ghp|gho|xox[bap]|AKIA)[-_A-Za-z0-9]{16,}\b)/g },
   { kind: 'EMAIL', pattern: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
-  // An IBAN in capitals, grouped or not; one typed in lower case, unbroken; or one in any case made of digit groups.
-  { kind: 'IBAN', pattern: /\b(?:[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,4})?|[a-z]{2}\d{2}[a-z0-9]{12,30}|[A-Za-z]{2}\d{2}(?: ?\d{4}){3,7}(?: ?\d{1,4})?)\b/g, accept: (m) => !/[a-z]/.test(m) || ibanChecks(m) },
+  { kind: 'IBAN', pattern: IBAN, accept: ibanOk, shrink: ibanShrink },
   { kind: 'CARD', pattern: /\b(?:\d[ -]?){13,19}\b/g, accept: luhn },
   { kind: 'ID', pattern: /(?<![\d+])[12]\d{9}(?!\d)/g },
   // A date of birth: only a full date with a year, and only after a cue. A birthday
@@ -168,16 +192,17 @@ function fold(s: string): string {
 
 const HAS_INVISIBLE = new RegExp(INVISIBLE.source);
 
-/** One text as the finders see it and as the owner wrote it. */
+/** One text as the finders read it, and as the owner wrote it. */
 interface Prepared {
-  /** the text with invisible characters taken out, which every pattern runs on */
+  /** what every pattern runs on: the original without its invisible characters, or with each of them as a space */
   text: string;
   original: string;
-  /** at[i] is where character i of text sits in original, and at[text.length] is original.length; null when nothing was taken out */
+  /** at[i] is where character i of text sits in original; null when text and original line up one to one */
   at: number[] | null;
 }
 
-function prepare(original: string): Prepared {
+/** The text with invisible characters taken out, so Sa\u200Bmi is Sami. */
+function stripped(original: string): Prepared {
   if (!HAS_INVISIBLE.test(original)) return { text: original, original, at: null };
   const at: number[] = [];
   let text = '';
@@ -187,20 +212,29 @@ function prepare(original: string): Prepared {
     at.push(i);
     text += c;
   }
-  at.push(original.length);
   return { text, original, at };
 }
 
-/** Characters from `from` to `to` of the prepared text, as the owner wrote them, invisible characters included. */
-function asWritten(p: Prepared, from: number, to: number): string {
-  return p.at ? p.original.slice(p.at[from] ?? p.original.length, p.at[to] ?? p.original.length) : p.original.slice(from, to);
+/** The text with each invisible character as a space, so Sami\u200BHaddad is two words. Same length, so offsets are the original's. */
+const spaced = (original: string): Prepared => ({ text: original.replace(INVISIBLE, ' '), original, at: null });
+
+/** Where characters from `from` to `to` of a prepared text sit in the original. The last character's own place ends the span, so an invisible character right after a value is not part of it. */
+function placed(p: Prepared, from: number, to: number): [number, number] {
+  if (!p.at) return [from, to];
+  const start = p.at[from] ?? p.original.length;
+  return [start, to > from ? (p.at[to - 1] ?? p.original.length - 1) + 1 : start];
 }
 
-/** A value to hide: from and to in the prepared text, and the placeholder that goes in its place. */
-interface Cut {
+/** A value to hide: where it sits, what kind it is, what makes it the same as another, and what the placeholder stands for. */
+interface Found {
   from: number;
   to: number;
-  ph: string;
+  kind: string;
+  key: string;
+  /** null until placed in the original, when it becomes the text as written */
+  value: string | null;
+  /** the structured rule that found it, for a second look at a value an invisible character runs through */
+  rule?: Rule;
 }
 
 /**
@@ -209,9 +243,9 @@ interface Cut {
  * still points into the same text. NUL is in no pattern and is not a letter.
  */
 const BLANK = '\u0000';
-function blank(text: string, cuts: Cut[]): string {
+function blank(text: string, found: { from: number; to: number }[]): string {
   let out = text;
-  for (const c of cuts) out = out.slice(0, c.from) + BLANK.repeat(c.to - c.from) + out.slice(c.to);
+  for (const f of found) out = out.slice(0, f.from) + BLANK.repeat(f.to - f.from) + out.slice(f.to);
   return out;
 }
 
@@ -264,26 +298,28 @@ class Placeholders {
   }
 }
 
-/** Every structured value in one text, and the text with those values blanked for the passes that follow. */
-function redactStructured(p: Prepared, ph: Placeholders): { cuts: Cut[]; blanked: string } {
-  const cuts: Cut[] = [];
-  let blanked = p.text;
+/** Every structured value in one prepared text, and the text with those values blanked for the passes that follow. */
+function redactStructured(text: string): { found: Found[]; blanked: string } {
+  const found: Found[] = [];
+  let blanked = text;
   for (const rule of RULES) {
     const norm = fold(blanked);
-    const found: Cut[] = [];
+    const mine: Found[] = [];
     for (const m of norm.matchAll(rule.pattern)) {
-      const seen = m[0];
+      let seen = m[0];
       if (seen.includes(BLANK) || PLACEHOLDER.test(seen)) continue;
-      if (rule.accept && !rule.accept(seen)) continue;
-      const from = m.index;
-      const to = from + seen.length;
-      found.push({ from, to, ph: ph.get(rule.kind, rule.key ? rule.key(seen) : seen, asWritten(p, from, to)) });
+      if (rule.accept && !rule.accept(seen)) {
+        const shorter = rule.shrink?.(seen);
+        if (!shorter) continue;
+        seen = shorter;
+      }
+      mine.push({ from: m.index, to: m.index + seen.length, kind: rule.kind, key: rule.key ? rule.key(seen) : seen, value: null, rule });
     }
-    if (found.length === 0) continue;
-    cuts.push(...found);
-    blanked = blank(blanked, found);
+    if (mine.length === 0) continue;
+    if (!rule.keep) found.push(...mine);
+    blanked = blank(blanked, mine);
   }
-  return { cuts, blanked };
+  return { found, blanked };
 }
 
 // ---------------------------------------------------------------- companies
@@ -364,7 +400,7 @@ function findCompanies(text: string): Company[] {
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-function redactCompanies(texts: string[], ph: Placeholders): Cut[][] {
+function redactCompanies(texts: string[]): Found[][] {
   // The full name found anywhere numbers the company; its short forms point at it.
   const owner = new Map<string, string | null>();
   const full: string[] = [];
@@ -383,7 +419,8 @@ function redactCompanies(texts: string[], ph: Placeholders): Cut[][] {
   return texts.map((text) =>
     [...text.matchAll(re)].map((m) => {
       const company = owner.get(m[0])!;
-      return { from: m.index, to: m.index + m[0].length, ph: ph.get('COMPANY', company, company) };
+      // Keyed without spaces or case, so the two readings of Sandpiper\u200BFitout Co. are one company.
+      return { from: m.index, to: m.index + m[0].length, kind: 'COMPANY', key: company.replace(/\s+/g, '').toLowerCase(), value: company };
     }),
   );
 }
@@ -425,9 +462,12 @@ function tokenize(text: string, known: Set<string>): Token[] {
 }
 
 const isGiven = (t: Token): boolean => (t.ar ? GIVEN_ARABIC.has(t.n) : GIVEN_LATIN.has(t.n) || GIVEN_LATIN.has(t.n.replace(/['-]/g, '')));
-/** The Arabic article written in Latin script: Al Rashid, El Masri open a family name, and Al-Rashid is one on its own. */
+/** The Arabic article written in Latin script: Al Rashid, El Masri open a family name, and Al-Rashid is one on its own. Al Khobar and Al-Jazeera are not people. */
 const ARTICLE_LATIN = new Set(['al', 'el']);
-const articled = (t: Token): boolean => !t.ar && t.cap && /^(?:al|el)-\p{L}{3,}$/u.test(t.n);
+const articled = (t: Token): boolean => {
+  const m = /^(?:al|el)-(\p{L}{3,})$/u.exec(t.n);
+  return !t.ar && t.cap && !!m && !PLACE_AL.has(m[1]!);
+};
 const isStop = (t: Token): boolean => (t.ar ? STOP_ARABIC.has(t.n) : STOP_LATIN.has(t.n));
 
 /** A word that can stand as a name after a cue: a capitalised Latin word, or an Arabic word that is not a function word. */
@@ -479,17 +519,17 @@ function afterCue(text: string, tok: Token[], i: number): number {
   return !cand.ar && adjacent(text, prev, cand, true) && nameable(cand) ? k : -1;
 }
 
-/** Pass one: find every name in one text, as a normalised key and its surface form, read through `written` when the text was prepared. */
-function findNames(text: string, written: (from: number, to: number) => string = (from, to) => text.slice(from, to)): { key: string; surface: string }[] {
+/** Pass one: find every name in one prepared text, as a normalised key, its surface form and where it sits. */
+function findNames(text: string): { key: string; surface: string; from: number; to: number }[] {
   const tok = tokenize(text, new Set());
-  const found: { key: string; surface: string }[] = [];
+  const found: { key: string; surface: string; from: number; to: number }[] = [];
   let i = 0;
   while (i < tok.length) {
     const t = tok[i]!;
     let start = -1;
     let j = -1;
     const next = tok[i + 1];
-    const leads = t.ar ? LEAD_ARABIC.has(t.n) : LEAD_LATIN.has(t.n) || (t.cap && ARTICLE_LATIN.has(t.n));
+    const leads = t.ar ? LEAD_ARABIC.has(t.n) : LEAD_LATIN.has(t.n) || (t.cap && ARTICLE_LATIN.has(t.n) && !!next && !PLACE_AL.has(next.n));
     if (leads && next && next.ar === t.ar && adjacent(text, t, next) && nameable(next)) {
       start = i;
       j = i + 1;
@@ -522,16 +562,24 @@ function findNames(text: string, written: (from: number, to: number) => string =
       i = j + 1;
       continue;
     }
-    found.push({ key: parts.map((p) => p.n).join(' '), surface: written(parts[0]!.cs, parts[parts.length - 1]!.e) });
+    const from = parts[0]!.cs;
+    const to = parts[parts.length - 1]!.e;
+    found.push({ key: parts.map((p) => p.n).join(' '), surface: text.slice(from, to), from, to });
     i = j + 1;
   }
   return found;
 }
 
-/** Every name the finder sees in one text, as written. Used to learn names from the whole vault. */
+/** Every name the finder sees in one text, without invisible characters, under either reading of them. Used to learn names from the whole vault. */
 export function findPeople(text: string): string[] {
-  const p = prepare(text);
-  return findNames(p.text, (from, to) => asWritten(p, from, to)).map((f) => f.surface);
+  const first = stripped(text);
+  const asFound = (p: Prepared): Found[] =>
+    findNames(p.text).map((f) => {
+      const [from, to] = placed(p, f.from, f.to);
+      return { from, to, kind: 'PERSON', key: f.key, value: f.surface };
+    });
+  const names = first.at ? union(text, asFound(first), asFound(spaced(text))) : asFound(first);
+  return [...new Set(names.map((f) => f.value!))];
 }
 
 /** Pass two: every occurrence of a known name, full or by one of its parts, in one text. */
@@ -571,7 +619,7 @@ function locateNames(text: string, keys: string[][], alias: Map<string, string>)
 
 const keyOf = (name: string): string => name.trim().split(/\s+/).filter(Boolean).map(normToken).join(' ');
 
-function redactNames(texts: string[], prepped: Prepared[], ph: Placeholders, people: string[], same: [string, string][]): Cut[][] {
+function redactNames(texts: string[], people: string[], same: [string, string][]): Found[][] {
   const surface = new Map<string, string>();
   for (const p of people) {
     const key = keyOf(p);
@@ -587,9 +635,7 @@ function redactNames(texts: string[], prepped: Prepared[], ph: Placeholders, peo
     if (!surface.has(o)) surface.set(o, other.trim());
     stands.set(o, n);
   }
-  texts.forEach((t, i) => {
-    for (const f of findNames(t, (from, to) => asWritten(prepped[i]!, from, to))) if (!surface.has(f.key)) surface.set(f.key, f.surface);
-  });
+  for (const t of texts) for (const f of findNames(t)) if (!surface.has(f.key)) surface.set(f.key, f.surface);
   if (surface.size === 0) return texts.map(() => []);
 
   // A shorter name that sits inside exactly one longer one (Al Saud in Mohammed
@@ -623,13 +669,90 @@ function redactNames(texts: string[], prepped: Prepared[], ph: Placeholders, peo
   for (const k of keys) if (k.length === 1) alias.set(k[0]!, owner.get(k[0]!) ?? k[0]!);
   for (const [part, full] of owner) if (!alias.has(part)) alias.set(part, full ?? part);
 
-  // Numbered in reading order.
-  return texts.map((text, i) =>
+  // The placeholder stands for the name as first seen, without invisible characters.
+  return texts.map((text) =>
     locateNames(text, keys, alias).map((s) => {
       const key = stands.get(s.key) ?? s.key;
-      return { from: s.from, to: s.to, ph: ph.get('PERSON', key, surface.get(key) ?? asWritten(prepped[i]!, s.from, s.to)) };
+      return { from: s.from, to: s.to, kind: 'PERSON', key, value: surface.get(key) ?? text.slice(s.from, s.to) };
     }),
   );
+}
+
+/**
+ * A structured value an invisible character runs through is two values when
+ * each visible piece is a whole match of the same rule on its own: two phone
+ * numbers with only a zero width space between them, which both readings
+ * take as one number because a space may sit inside a phone number.
+ */
+function splitAtInvisible(original: string, f: Found): Found[] {
+  const rule = f.rule;
+  const slice = original.slice(f.from, f.to);
+  if (!rule || !HAS_INVISIBLE.test(slice)) return [f];
+  const pieces: Found[] = [];
+  let at = f.from;
+  for (const piece of slice.split(INVISIBLE)) {
+    const from = at;
+    at += piece.length + 1;
+    if (!piece) continue;
+    const m = [...fold(piece).matchAll(rule.pattern)];
+    if (m.length !== 1 || m[0]![0] !== fold(piece) || (rule.accept && !rule.accept(m[0]![0]))) return [f];
+    pieces.push({ ...f, from, to: from + piece.length, key: rule.key ? rule.key(fold(piece)) : fold(piece), value: piece });
+  }
+  return pieces.length > 1 ? pieces : [f];
+}
+
+/** Everything to hide in each prepared text, placed in the original, in reading order. */
+function findAll(prepped: Prepared[], opts: RedactOptions): Found[][] {
+  const structured = prepped.map((p) => redactStructured(p.text));
+  const companies = redactCompanies(structured.map((s) => s.blanked));
+  const names = redactNames(structured.map((s, i) => blank(s.blanked, companies[i]!)), opts.people ?? [], opts.same ?? []);
+  return prepped.map((p, i) =>
+    [...structured[i]!.found, ...companies[i]!, ...names[i]!]
+      .map((f) => {
+        const [from, to] = placed(p, f.from, f.to);
+        return { ...f, from, to, value: f.value ?? p.original.slice(from, to) };
+      })
+      .sort((a, b) => a.from - b.from),
+  );
+}
+
+/**
+ * What two readings of one text found, as one list. Where they overlap, the
+ * reading that covers more visible characters wins: a@b.com\u200Bc@d.com is
+ * two addresses in the second reading and one odd one in the first. On a tie,
+ * more values win (two phones over one that spans both), then a name with
+ * more words (Al Rashid over AlRashid), then the first reading, with the
+ * invisible characters gone, is the one meant.
+ */
+function union(original: string, first: Found[], second: Found[]): Found[] {
+  const all = [...first.map((f) => ({ f, second: false })), ...second.map((f) => ({ f, second: true }))].sort((a, b) => a.f.from - b.f.from || b.f.to - a.f.to);
+  const visible = (f: Found): number => original.slice(f.from, f.to).replace(INVISIBLE, '').length;
+  const words = (f: Found): number => (f.kind === 'PERSON' || f.kind === 'COMPANY' ? (f.value ?? '').split(/\s+/).length : 0);
+  const out: Found[] = [];
+  let i = 0;
+  while (i < all.length) {
+    let j = i;
+    let end = all[i]!.f.to;
+    while (j + 1 < all.length && all[j + 1]!.f.from < end) {
+      j += 1;
+      end = Math.max(end, all[j]!.f.to);
+    }
+    const group = all.slice(i, j + 1);
+    const score = (second: boolean): number[] => {
+      const mine = group.filter((g) => g.second === second).map((g) => g.f);
+      return [mine.reduce((n, f) => n + visible(f), 0), mine.length, mine.reduce((n, f) => n + words(f), 0)];
+    };
+    const [a, b] = [score(false), score(true)];
+    let pick = false;
+    for (let k = 0; k < a.length; k++) {
+      if (a[k] === b[k]) continue;
+      pick = b[k]! > a[k]!;
+      break;
+    }
+    out.push(...group.filter((g) => g.second === pick).map((g) => g.f));
+    i = j + 1;
+  }
+  return out;
 }
 
 /**
@@ -638,20 +761,23 @@ function redactNames(texts: string[], prepped: Prepared[], ph: Placeholders, peo
  */
 export function redactAll(texts: string[], opts: RedactOptions = {}): { texts: string[]; counts: Record<string, number>; map: Map<string, string> } {
   const ph = new Placeholders(texts);
-  const prepped = texts.map(prepare);
-  const structured = prepped.map((p) => redactStructured(p, ph));
-  const companies = redactCompanies(structured.map((s) => s.blanked), ph);
-  const names = redactNames(structured.map((s, i) => blank(s.blanked, companies[i]!)), prepped, ph, opts.people ?? [], opts.same ?? []);
-  // Every value found, in reading order, put into the text as the owner wrote it.
-  const out = prepped.map((p, i) => {
-    const cuts = [...structured[i]!.cuts, ...companies[i]!, ...names[i]!].sort((a, b) => a.from - b.from);
-    let text = '';
+  const first = texts.map(stripped);
+  let found = findAll(first, opts);
+  // When any text has invisible characters, every text is read again with each of them as a space, and what
+  // either reading finds is hidden: a name learned from Sami\u200BHaddad in one text hides Haddad in the others.
+  if (first.some((p) => p.at)) {
+    const second = findAll(texts.map(spaced), opts);
+    found = found.map((f, i) => union(texts[i]!, f, second[i]!).flatMap((x) => splitAtInvisible(texts[i]!, x)));
+  }
+  // Placeholders are numbered in reading order and put into the text as the owner wrote it.
+  const out = texts.map((text, i) => {
+    let result = '';
     let last = 0;
-    for (const c of cuts) {
-      text += asWritten(p, last, c.from) + c.ph;
-      last = c.to;
+    for (const f of found[i]!) {
+      result += text.slice(last, f.from) + ph.get(f.kind, f.key, f.value ?? text.slice(f.from, f.to));
+      last = f.to;
     }
-    return text + asWritten(p, last, p.text.length);
+    return result + text.slice(last);
   });
   return { texts: out, counts: ph.counts, map: ph.map };
 }

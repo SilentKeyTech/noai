@@ -24,6 +24,7 @@ const leaves = (text: string, kind: string) => {
 const PAT = `github_pat_11ABCDEFG0${'abcdefghijklmnop'.slice(0, 12)}_${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2W3x4Y5z6A7b8C9d'.slice(0, 59)}`;
 const GOOGLE = 'AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBxY';
 const JWT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+const B64 = 'MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun';
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\nVTLw7onLRnrq0/IzW7yWR7QkrmBL7jTKEn5u+qKhbwKfBstIs+bMY2Zkp18gnTxK\n-----END RSA PRIVATE KEY-----';
 
 describe('structured kinds the audit found missing', () => {
@@ -37,9 +38,13 @@ describe('structured kinds the audit found missing', () => {
     leaves('ref xy99 1234 5678 9012 3456', 'IBAN');
     leaves('commit ab12cdef0123456789abcdef0123456789abcdef', 'IBAN');
   });
-  it('LIMIT: an IBAN with letters in it, typed in lower case with spaces, reads as words', () => {
-    assert.equal(redact('gb82 west 1234 5698 7654 32').counts.IBAN, undefined);
-    assert.equal(redact('gb82west12345698765432').counts.IBAN, 1);
+  it('hides an IBAN with letters in the bank code in any case, grouped or not, and only the IBAN', () => {
+    for (const v of ['Gb82west12345698765432', 'GB82west12345698765432', 'gb82 west 1234 5698 7654 32', 'Gb82 West 1234 5698 7654 32', 'gb82west12345698765432']) {
+      const r = redact(`iban ${v} please`);
+      assert.equal(r.text, 'iban [IBAN_1] please', v);
+    }
+    assert.equal(redact('iban sa0380000000608010167519 please').text, 'iban [IBAN_1] please');
+    assert.equal(redact('gb82west12345698765433 is wrong').counts.IBAN, undefined, 'a lower case IBAN that fails its check is not one');
   });
 
   it('hides a phone written with dashes that are not hyphens, or with full width digits', () => {
@@ -77,8 +82,15 @@ describe('structured kinds the audit found missing', () => {
     const r = hides(`Authorization: Bearer ${JWT}.`, [JWT, 'SflKxw'], 'SECRET');
     assert.equal(r.text, 'Authorization: Bearer [SECRET_1].');
   });
+  it('hides a JWT with no signature, and a JWE with five parts', () => {
+    const none = `${JWT.split('.').slice(0, 2).join('.')}.`;
+    assert.equal(hides(`token ${none} end`, [none.slice(0, 20)], 'SECRET').text, 'token [SECRET_1] end');
+    const jwe = 'eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.OKOawDo13gRp2ojaHV7LFpZcgV7T6DVZKTyKOMTYUmKoTCVJRgckCL9kiMT03JGeipsEdY3mx_etLbbWSrFr05kLzcSr4qKAq7YN7e9jwQRb23nfa6c9d.48V1_ALb6US04U3b.5eym8TW_c8SuK0ltJ3rpYIzOeDQz7TALvtu6UG9oMo4vpzs9tX_EFShS8iB7j6jiSdiwkIr3ajwQzaBt9D1ZGdRkNq5GI7Ki_c-MLdhbgIaR2tLEhhBubTrDfGpuPXcD_j7ChzSVJtQ_aHRdeV0hWPY39Wfxk2Jt5dCUdx2yvZGoA.XFBoMYUZodetZdvTiFvSkQ';
+    assert.equal(hides(`${jwe} end`, ['OKOawDo13', 'XFBoMYUZ'], 'SECRET').text, '[SECRET_1] end');
+    assert.equal(hides(`${JWT}.extraSegmentHere1234 end`, ['SflKxw', 'extraSegment'], 'SECRET').text, '[SECRET_1] end');
+  });
   it('leaves dotted versions, domains and short dotted strings alone', () => {
-    leaves('node v22.1.3 on example.com.au, see a.b.c and eyJabc.eyJdef.ghi', 'SECRET');
+    leaves('node v22.1.3 on example.com.au, see a.b.c and eyJabc.eyJdef.ghi and v1.2.3', 'SECRET');
   });
 
   it('hides a PEM private key block from BEGIN to END, over several lines', () => {
@@ -87,21 +99,51 @@ describe('structured kinds the audit found missing', () => {
     hides('-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n-----END OPENSSH PRIVATE KEY-----', ['b3BlbnNzaC'], 'SECRET');
     hides('-----BEGIN PRIVATE KEY-----\r\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC\r\n-----END PRIVATE KEY-----', ['MIIEvQ'], 'SECRET');
   });
-  it('leaves a certificate and the words private key alone', () => {
-    leaves('-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUYJm\n-----END CERTIFICATE-----', 'SECRET');
+  it('leaves a certificate, a public key and the words private key alone', () => {
+    leaves(`-----BEGIN CERTIFICATE-----\n${B64}\n${B64.slice(0, 40)}\n-----END CERTIFICATE-----`, 'SECRET');
+    leaves(`-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nmQENBF${B64.slice(6)}\n=abcd\n-----END PGP PUBLIC KEY BLOCK-----`, 'SECRET');
+    leaves(`-----BEGIN PUBLIC KEY-----\n${B64}\n-----END PUBLIC KEY-----`, 'SECRET');
     leaves('keep the private key in the vault', 'SECRET');
+  });
+  it('hides a private key whose END line is missing, and a key body with no armour at all', () => {
+    const cut = `-----BEGIN RSA PRIVATE KEY-----\n${B64}\nVTLw7onLRnrq0/IzW7yWR7QkrmBL7jTKEn5u+qKhbwKfBstIs+bMY2Zkp18gnTxK\n`;
+    assert.equal(hides(`key\n${cut}`, ['MIIEow', 'VTLw7on', 'BEGIN RSA'], 'SECRET').text, 'key\n[SECRET_1]\n');
+    assert.equal(hides(`${cut}end of note`, ['MIIEow'], 'SECRET').text, '[SECRET_1]\nend of note');
+    assert.equal(hides(`key ${B64}${B64.slice(0, 20)} end`, ['MIIEow'], 'SECRET').text, 'key [SECRET_1] end');
+    assert.equal(hides(`key\n${B64}\n${B64}\nend`, ['MIIEow'], 'SECRET').text, 'key\n[SECRET_1]\nend');
+    const ssh = 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW';
+    assert.equal(hides(`key ${ssh} end`, ['b3BlbnNzaC1rZXktdjEAAAAABG5vbmU'], 'SECRET').text, 'key [SECRET_1] end');
+  });
+  it('hides a private key that follows a certificate whose END line is missing, or that sits inside one', () => {
+    const key = `-----BEGIN RSA PRIVATE KEY-----\n${B64}\n-----END RSA PRIVATE KEY-----`;
+    const bundles = [
+      `-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUYJmQ${B64.slice(24)}\n${key}`,
+      `-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUYJmQ${B64.slice(24)}\n${key}\n-----END CERTIFICATE-----`,
+      `-----BEGIN CERTIFICATE-----\nMIIBszCC\n\n-----BEGIN PRIVATE KEY-----\n${B64}\n-----END PRIVATE KEY-----`,
+    ];
+    for (const text of bundles) {
+      const r = redact(text);
+      assert.ok(!r.text.includes(B64) && !r.text.includes('BEGIN RSA PRIVATE') && !r.text.includes('BEGIN PRIVATE KEY'), r.text);
+      assert.ok((r.counts.SECRET ?? 0) >= 1, r.text);
+    }
+  });
+  it('hides a PGP private key block like a PEM one', () => {
+    const pgp = `-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOYBF${B64.slice(6)}\n=abcd\n-----END PGP PRIVATE KEY BLOCK-----`;
+    assert.equal(hides(`key\n${pgp}\nend`, ['lQOYBF', 'BEGIN PGP'], 'SECRET').text, 'key\n[SECRET_1]\nend');
+    assert.equal(hides(`-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOYBF${B64.slice(6)}\n`, ['lQOYBF'], 'SECRET').text, '[SECRET_1]\n');
   });
 });
 
 const INVISIBLE = ['​', '‌', '‍', '﻿', '­', '⁠'];
 
 describe('names and values split by characters that have no width', () => {
-  it('hides a name with a zero width character inside it, and gives the owner back what they typed', () => {
+  it('hides a name with a zero width character inside it, and gives the owner back the clean name', () => {
     for (const z of INVISIBLE) {
       const text = `My brother Sa${z}mi Had${z}dad called.`;
       const r = redact(text);
       assert.equal(r.text, 'My brother [PERSON_1] called.', JSON.stringify(text));
-      assert.equal(rehydrate(r.text, r.map), text);
+      assert.equal(r.map.get('[PERSON_1]'), 'Sami Haddad');
+      assert.equal(rehydrate(r.text, r.map), 'My brother Sami Haddad called.');
     }
   });
   it('hides a known name even when the note splits it', () => {
@@ -123,8 +165,8 @@ describe('names and values split by characters that have no width', () => {
     assert.equal(r.map.get('[PHONE_1]'), '0551234567');
   });
   it('learns a split name from the vault as the clean name', () => {
-    const k = knownPeople([{ title: 'House', body: 'My landlord Zor​vath Quell wants the rent.' }]);
-    assert.deepEqual(k.people.map((p) => p.replace(/​/g, '')), ['Zorvath Quell']);
+    const k = knownPeople([{ title: 'House', body: 'My landlord Zor\u200Bvath Quell wants the rent.' }]);
+    assert.deepEqual(k.people, ['Zorvath Quell']);
     assert.equal(cleanName('Zor​vath Qu­ell'), 'Zorvath Quell');
     const r = redactAll(['Zorvath paid.'], k);
     assert.equal(r.texts[0], '[PERSON_1] paid.');
@@ -146,10 +188,87 @@ describe('Arabic al- family names', () => {
   it('leaves Al on its own alone', () => {
     assert.deepEqual(redact('Meet Al at noon, then al fresco.').counts, {});
   });
+  it('leaves places and organisations written with Al or El readable, and still hides a person', () => {
+    const places = 'Drive to Al Khobar, Al Ain, Al Ula, Al Hasa, Al Jubail, Al Qassim, Al Taif, Al Hofuf. Watch Al Jazeera and Al-Jazeera, read about Al-Qaeda and El-Alamein. El Paso, El Salvador, El Niño and El Camino Real. الخبر والعلا والأحساء والطائف.';
+    assert.deepEqual(redact(places).counts, {}, redact(places).text);
+    assert.equal(redact('Al Rashid called.').text, '[PERSON_1] called.');
+    assert.equal(redact('Ask Mr. Al Rashid and Al Gore.').text, 'Ask Mr. [PERSON_1] and [PERSON_2].');
+    assert.equal(redact('أحمد الرياض اتصل').text, '[PERSON_1] اتصل', 'after a given name a city word is part of the name, as Ahmad Al Riyadh would be');
+  });
   it('LIMIT: a bare Arabic ال- family name is an ordinary word until the vault knows the person', () => {
     assert.deepEqual(redact('الرشيد اتصل').counts, {});
     const r = redact('الرشيد اتصل', { people: ['أحمد الرشيد'] });
     assert.equal(r.text, '[PERSON_1] اتصل');
+  });
+});
+
+describe('found in review: what the invisible characters still let through', () => {
+  it('hides a name that a zero width space has glued to the next word, which the first reading cannot see', () => {
+    for (const text of ['Sami\u200BHaddad called', 'Sami\u200Bsaid hi', 'My brother Sami\u200BHaddad called']) {
+      const r = redact(text);
+      assert.ok(!r.text.includes('Sami') && !r.text.includes('Haddad'), `${JSON.stringify(text)} -> ${JSON.stringify(r.text)}`);
+    }
+  });
+  it('hides two values a zero width space has glued together, both of them', () => {
+    const r = redact('a@b.com\u200Bc@d.com');
+    assert.ok(!r.text.includes('a@b') && !r.text.includes('c@d') && !r.text.includes('@d.com'), r.text);
+    const ids = redact('ID 1012345678\u200B0551234567');
+    assert.ok(!ids.text.includes('1012345678') && !ids.text.includes('0551234567'), ids.text);
+    const card = redact('card 4111111111111111\u200B1');
+    assert.ok(!card.text.includes('4111'), card.text);
+  });
+  it('hides a value with a bidi or format control inside it, as Arabic text often carries', () => {
+    assert.equal(redact('055\u200E1234567').text, '[PHONE_1]', 'left to right mark');
+    assert.equal(redact('\u200F0551234567\u200F').text, '\u200F[PHONE_1]\u200F', 'right to left marks around');
+    assert.equal(redact('call \u202A+966 55 123 4567\u202C now').text, 'call \u202A[PHONE_1]\u202C now', 'embedding and pop');
+    assert.equal(redact('call \u2066+966551234567\u2069 now').text, 'call \u2066[PHONE_1]\u2069 now', 'isolate');
+    assert.equal(redact('Sa\u202Emi Haddad called').text, '[PERSON_1] called', 'right to left override');
+    assert.equal(redact('أخي سا\u061Cمي اتصل').text, 'أخي [PERSON_1] اتصل', 'Arabic letter mark');
+    assert.equal(redact('أخي سا\u200Cمي اتصل').text, 'أخي [PERSON_1] اتصل', 'zero width non-joiner');
+    assert.equal(redact('Sami\uFE0F Haddad called').text, '[PERSON_1] called', 'variation selector');
+    assert.equal(redact('Sa\u034Fmi Haddad called').text, '[PERSON_1] called', 'combining grapheme joiner');
+    assert.equal(redact('call \u180E0551234567 now').text, 'call \u180E[PHONE_1] now', 'Mongolian vowel separator');
+  });
+  it('keeps an invisible character at the very start of a text, and leaves one right after a value out of the value', () => {
+    const bom = redact('\uFEFFhello world');
+    assert.equal(bom.text, '\uFEFFhello world');
+    assert.equal(rehydrate(bom.text, bom.map), '\uFEFFhello world');
+    const r = redact('call \u200B0551234567\u200B now');
+    assert.equal(r.text, 'call \u200B[PHONE_1]\u200B now');
+    assert.equal(r.map.get('[PHONE_1]'), '0551234567');
+    assert.equal(rehydrate(r.text, r.map), 'call \u200B0551234567\u200B now');
+    const name = redact('\uFEFFSami called');
+    assert.equal(name.text, '\uFEFF[PERSON_1] called');
+  });
+});
+
+describe('found in the second review: the two readings must agree with each other', () => {
+  it('hides a name learned from a text with invisible characters in a text without them, in either order', () => {
+    for (const texts of [['Haddad paid.', 'Sami\u200BHaddad called.'], ['Sami\u200BHaddad called.', 'Haddad paid.']]) {
+      const r = redactAll(texts);
+      assert.deepEqual(r.texts, texts.map((t) => (t.startsWith('Haddad') ? '[PERSON_1] paid.' : '[PERSON_1] called.')), JSON.stringify(texts));
+      assert.deepEqual(r.counts, { PERSON: 1 });
+    }
+  });
+  it('keeps two phones that only an invisible character separates as two values', () => {
+    const r = redact('call 0551234567\u200B0551234568 now');
+    assert.equal(r.text, 'call [PHONE_1]\u200B[PHONE_2] now');
+    assert.equal(r.map.get('[PHONE_1]'), '0551234567');
+    assert.equal(r.map.get('[PHONE_2]'), '0551234568');
+  });
+  it('numbers a company once when the two readings spell its name differently', () => {
+    const r = redact('Sandpiper\u200BFitout Co. signed; Sandpiper agreed.');
+    assert.equal(r.text, '[COMPANY_1] signed; [COMPANY_1] agreed.');
+    assert.deepEqual(r.counts, { COMPANY: 1 });
+  });
+  it('learns the spelling with more words when the two readings cover the same span', () => {
+    assert.deepEqual(findPeople('Mr. Al\u200BRashid called.'), ['Al Rashid']);
+    assert.deepEqual(findPeople('Dr. Zorbek\u200BTamarind called.'), ['Zorbek Tamarind']);
+  });
+  it('lets a city word continue a name after a given name in Arabic, as it does in Latin script', () => {
+    assert.equal(redact('أحمد الخبر اتصل').text, '[PERSON_1] اتصل');
+    assert.equal(redact('Ahmad Al Khobar called.').text, '[PERSON_1] called.');
+    assert.deepEqual(redact('الخبر والعلا والأحساء والطائف.').counts, {});
   });
 });
 
