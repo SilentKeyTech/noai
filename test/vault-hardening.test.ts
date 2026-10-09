@@ -225,7 +225,8 @@ async function crashingSave(root: string, where: 'before-rename' | 'mid-write'):
     let stderr = '';
     child.stderr.on('data', (c: Buffer) => (stderr += c.toString()));
     child.on('error', reject);
-    child.on('exit', (code) => resolve({ code: code ?? -1, stderr }));
+    // 'close' and not 'exit': stderr may still hold output when 'exit' fires.
+    child.on('close', (code) => resolve({ code: code ?? -1, stderr }));
   });
 }
 

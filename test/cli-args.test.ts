@@ -60,7 +60,8 @@ function run(file: string, args: string[], h: Home, env: Record<string, string> 
     child.stdout.on('data', (c: Buffer) => (stdout += c.toString()));
     child.stderr.on('data', (c: Buffer) => (stderr += c.toString()));
     child.on('error', reject);
-    child.on('exit', (code) => resolve({ code: code ?? -1, stdout, stderr }));
+    // 'close' and not 'exit': the pipes may still hold output when 'exit' fires.
+    child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }));
   });
 }
 
@@ -160,7 +161,11 @@ describe('noai with bad arguments', () => {
     await writeFile(join(h.data, 'ledger.jsonl'), 'this is not a ledger\n');
     const before = await tree(h.home);
     const broken = await run(CLI, ['verify'], h);
-    refused(broken, before, await tree(h.home), /JSON/, 'noai verify with a broken ledger');
+    assert.notEqual(broken.code, 0, 'a broken ledger verified');
+    // Two shapes are right: a parse error on stderr, or the ledger reader keeping the damaged line and verify reporting BROKEN on stdout.
+    assert.ok(/JSON/.test(broken.stderr) || broken.stdout.startsWith('BROKEN: Entry 0 cannot be read'), `stdout ${JSON.stringify(broken.stdout)} stderr ${JSON.stringify(broken.stderr)}`);
+    for (const out of [broken.stdout, broken.stderr]) assert.ok(!STACK.test(out) && !out.includes('node:internal'), `a stack trace reached the user\n${out}`);
+    assert.deepEqual(await tree(h.home), before, 'verify changed the home folder');
   });
 });
 
