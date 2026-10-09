@@ -304,7 +304,8 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      console.log('npm run vault -- init | add <name> --host <host> [--in header,url,body] [--file <path>] | list | remove <name> | export <name> <path> | receipts | verify | run --env VAR=name --file VAR=name -- <command> | serve | token');
+      console.error('npm run vault -- init | add <name> --host <host> [--in header,url,body] [--file <path>] | list | remove <name> | export <name> <path> | receipts | verify | run --env VAR=name --file VAR=name -- <command> | serve | token');
+      process.exitCode = 1;
   }
 }
 
