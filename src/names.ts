@@ -203,12 +203,12 @@ export const PLACE_BEFORE_ARABIC = words('الملك الامير الاميره
 /**
  * Al and El open a family name (Al Rashid, El Masri) but also a place or an
  * organisation that must stay readable: Al Khobar, El Paso, Al Jazeera. The
- * words after Al, El or ال that name one of those and not a person.
+ * words after a bare Al or El that name one of those and not a person. After
+ * a given name they are part of the name, in either script: Ahmad Al Khobar.
  */
 export const PLACE_AL = words(`
 khobar ain ula hasa ahsa jubail qassim baha jouf kharj taif hofuf madinah madina medina riyadh dammam jeddah makkah mecca
 paso salvador nino niño camino jazeera arabiya qaeda alamein
-الخبر العين العلا الاحساء الحسا الجبيل القصيم الباحه الجوف الخرج الطائف الهفوف المدينه الرياض الدمام جده مكه
 `);
 
 /** One-letter Arabic prefixes that attach to a name: و and, ب with, ل for, ف so, ك like. */

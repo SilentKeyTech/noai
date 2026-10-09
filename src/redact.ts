@@ -145,10 +145,11 @@ function ibanShrink(m: string): string | null {
 }
 
 const RULES: Rule[] = [
-  // A certificate or a public key in armour is public. It stays, and no rule below reads into it.
-  { kind: 'KEEP', pattern: /-----BEGIN (?:[A-Z ]*CERTIFICATE[A-Z ]*|[A-Z ]*PUBLIC KEY(?: BLOCK)?)-----[\s\S]*?-----END [A-Z ]*-----/g, keep: true },
   // A private key in PEM or PGP armour, BEGIN to END, however many lines. With the END line missing, the lines of base64 and headers that follow BEGIN.
+  // It runs before the certificate rule below: a certificate body cannot hold a BEGIN line, so a key inside or after one is a key.
   { kind: 'SECRET', pattern: /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|[ \t]*(?:\r?\n(?:[A-Za-z0-9+/=]{16,}|[A-Za-z-]+: ?[^\r\n]*|=[A-Za-z0-9+/]{4}|(?=\r?\n))[ \t]*)*)/g },
+  // A certificate or a public key in armour is public. It stays, and the key body rule below does not read into it. It ends on its own END line and never crosses a BEGIN line.
+  { kind: 'KEEP', pattern: /-----BEGIN ((?:[A-Z]+ )*(?:CERTIFICATE|PUBLIC KEY)(?: BLOCK)?)-----(?:(?!-----BEGIN )[\s\S])*?-----END \1-----/g, keep: true },
   // A key body with no armour: DER in base64 starts MII, an OpenSSH key starts with "openssh-key-v1" in base64. Lines of base64 that follow belong to it.
   { kind: 'SECRET', pattern: /\b(?:MII[A-Za-z0-9+/=]{60,}|b3BlbnNzaC1rZXktdjE[A-Za-z0-9+/=]{20,})(?:\r?\n[A-Za-z0-9+/=]{16,})*/g },
   // API keys and tokens by their prefix: GitHub classic and fine grained, Google, Slack, AWS, Stripe-style, and a JWT or JWE (a base64url JSON header, then two to four more parts, or one more and an empty signature).
@@ -232,6 +233,8 @@ interface Found {
   key: string;
   /** null until placed in the original, when it becomes the text as written */
   value: string | null;
+  /** the structured rule that found it, for a second look at a value an invisible character runs through */
+  rule?: Rule;
 }
 
 /**
@@ -310,7 +313,7 @@ function redactStructured(text: string): { found: Found[]; blanked: string } {
         if (!shorter) continue;
         seen = shorter;
       }
-      mine.push({ from: m.index, to: m.index + seen.length, kind: rule.kind, key: rule.key ? rule.key(seen) : seen, value: null });
+      mine.push({ from: m.index, to: m.index + seen.length, kind: rule.kind, key: rule.key ? rule.key(seen) : seen, value: null, rule });
     }
     if (mine.length === 0) continue;
     if (!rule.keep) found.push(...mine);
@@ -416,7 +419,8 @@ function redactCompanies(texts: string[]): Found[][] {
   return texts.map((text) =>
     [...text.matchAll(re)].map((m) => {
       const company = owner.get(m[0])!;
-      return { from: m.index, to: m.index + m[0].length, kind: 'COMPANY', key: company, value: company };
+      // Keyed without spaces or case, so the two readings of Sandpiper\u200BFitout Co. are one company.
+      return { from: m.index, to: m.index + m[0].length, kind: 'COMPANY', key: company.replace(/\s+/g, '').toLowerCase(), value: company };
     }),
   );
 }
@@ -473,7 +477,7 @@ const nameable = (t: Token): boolean => !isStop(t) && (t.ar ? t.n.length >= 2 : 
 function continues(t: Token): boolean {
   if (isStop(t)) return false;
   if (isGiven(t)) return true;
-  if (t.ar) return t.n.startsWith('ال') && t.n.length >= 4 && !PLACE_AL.has(t.n);
+  if (t.ar) return t.n.startsWith('ال') && t.n.length >= 4;
   return t.cap;
 }
 
@@ -549,7 +553,7 @@ function findNames(text: string): { key: string; surface: string; from: number; 
       if (!b || b.ar !== a.ar || !adjacent(text, a, b)) break;
       const joins = b.ar ? JOIN_ARABIC.has(b.n) : JOIN_LATIN.has(b.n);
       const c = tok[j + 2];
-      if (joins && c && c.ar === b.ar && adjacent(text, b, c) && (continues(c) || nameable(c)) && !(ARTICLE_LATIN.has(b.n) && PLACE_AL.has(c.n))) j += 2;
+      if (joins && c && c.ar === b.ar && adjacent(text, b, c) && (continues(c) || nameable(c))) j += 2;
       else if (continues(b)) j += 1;
       else break;
     }
@@ -574,7 +578,7 @@ export function findPeople(text: string): string[] {
       const [from, to] = placed(p, f.from, f.to);
       return { from, to, kind: 'PERSON', key: f.key, value: f.surface };
     });
-  const names = first.at ? union(asFound(first), asFound(spaced(text))) : asFound(first);
+  const names = first.at ? union(text, asFound(first), asFound(spaced(text))) : asFound(first);
   return [...new Set(names.map((f) => f.value!))];
 }
 
@@ -674,6 +678,29 @@ function redactNames(texts: string[], people: string[], same: [string, string][]
   );
 }
 
+/**
+ * A structured value an invisible character runs through is two values when
+ * each visible piece is a whole match of the same rule on its own: two phone
+ * numbers with only a zero width space between them, which both readings
+ * take as one number because a space may sit inside a phone number.
+ */
+function splitAtInvisible(original: string, f: Found): Found[] {
+  const rule = f.rule;
+  const slice = original.slice(f.from, f.to);
+  if (!rule || !HAS_INVISIBLE.test(slice)) return [f];
+  const pieces: Found[] = [];
+  let at = f.from;
+  for (const piece of slice.split(INVISIBLE)) {
+    const from = at;
+    at += piece.length + 1;
+    if (!piece) continue;
+    const m = [...fold(piece).matchAll(rule.pattern)];
+    if (m.length !== 1 || m[0]![0] !== fold(piece) || (rule.accept && !rule.accept(m[0]![0]))) return [f];
+    pieces.push({ ...f, from, to: from + piece.length, key: rule.key ? rule.key(fold(piece)) : fold(piece), value: piece });
+  }
+  return pieces.length > 1 ? pieces : [f];
+}
+
 /** Everything to hide in each prepared text, placed in the original, in reading order. */
 function findAll(prepped: Prepared[], opts: RedactOptions): Found[][] {
   const structured = prepped.map((p) => redactStructured(p.text));
@@ -691,12 +718,16 @@ function findAll(prepped: Prepared[], opts: RedactOptions): Found[][] {
 
 /**
  * What two readings of one text found, as one list. Where they overlap, the
- * reading that covers more of the text wins: a@b.com\u200Bc@d.com is two
- * addresses in the second reading and one odd one in the first. On a tie the
- * first reading, with the invisible characters gone, is the one meant.
+ * reading that covers more visible characters wins: a@b.com\u200Bc@d.com is
+ * two addresses in the second reading and one odd one in the first. On a tie,
+ * more values win (two phones over one that spans both), then a name with
+ * more words (Al Rashid over AlRashid), then the first reading, with the
+ * invisible characters gone, is the one meant.
  */
-function union(first: Found[], second: Found[]): Found[] {
+function union(original: string, first: Found[], second: Found[]): Found[] {
   const all = [...first.map((f) => ({ f, second: false })), ...second.map((f) => ({ f, second: true }))].sort((a, b) => a.f.from - b.f.from || b.f.to - a.f.to);
+  const visible = (f: Found): number => original.slice(f.from, f.to).replace(INVISIBLE, '').length;
+  const words = (f: Found): number => (f.kind === 'PERSON' || f.kind === 'COMPANY' ? (f.value ?? '').split(/\s+/).length : 0);
   const out: Found[] = [];
   let i = 0;
   while (i < all.length) {
@@ -707,8 +738,17 @@ function union(first: Found[], second: Found[]): Found[] {
       end = Math.max(end, all[j]!.f.to);
     }
     const group = all.slice(i, j + 1);
-    const covered = (second: boolean): number => group.filter((g) => g.second === second).reduce((n, g) => n + g.f.to - g.f.from, 0);
-    const pick = covered(true) > covered(false);
+    const score = (second: boolean): number[] => {
+      const mine = group.filter((g) => g.second === second).map((g) => g.f);
+      return [mine.reduce((n, f) => n + visible(f), 0), mine.length, mine.reduce((n, f) => n + words(f), 0)];
+    };
+    const [a, b] = [score(false), score(true)];
+    let pick = false;
+    for (let k = 0; k < a.length; k++) {
+      if (a[k] === b[k]) continue;
+      pick = b[k]! > a[k]!;
+      break;
+    }
     out.push(...group.filter((g) => g.second === pick).map((g) => g.f));
     i = j + 1;
   }
@@ -723,10 +763,11 @@ export function redactAll(texts: string[], opts: RedactOptions = {}): { texts: s
   const ph = new Placeholders(texts);
   const first = texts.map(stripped);
   let found = findAll(first, opts);
-  // A text with invisible characters is read again with each of them as a space, and what either reading finds is hidden.
+  // When any text has invisible characters, every text is read again with each of them as a space, and what
+  // either reading finds is hidden: a name learned from Sami\u200BHaddad in one text hides Haddad in the others.
   if (first.some((p) => p.at)) {
     const second = findAll(texts.map(spaced), opts);
-    found = found.map((f, i) => (first[i]!.at ? union(f, second[i]!) : f));
+    found = found.map((f, i) => union(texts[i]!, f, second[i]!).flatMap((x) => splitAtInvisible(texts[i]!, x)));
   }
   // Placeholders are numbered in reading order and put into the text as the owner wrote it.
   const out = texts.map((text, i) => {
