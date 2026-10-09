@@ -10,11 +10,15 @@
  */
 
 /**
- * Characters that take no space on screen: zero width space, non-joiner and
- * joiner, word joiner, byte order mark, soft hyphen. Typed into a name they
- * split it into pieces no list matches, so names are compared without them.
+ * Characters that take no space on screen: the zero width space, joiner and
+ * non-joiner, the word joiner and its invisible operators, the byte order
+ * mark, the soft hyphen, the combining grapheme joiner, the variation
+ * selectors, the Mongolian vowel separator, and the bidi marks, embeddings,
+ * overrides and isolates that Arabic text copied from a chat carries. Typed
+ * or pasted into a name or a number they split it into pieces no pattern
+ * matches, so text is compared without them.
  */
-export const INVISIBLE = /[\u00AD\u200B-\u200D\u2060\uFEFF]/g;
+export const INVISIBLE = /[\u00AD\u034F\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFE00-\uFE0F\uFEFF]/g;
 
 /** Arabic letters are compared without diacritics or tatweel, with every alef form as ا and ة as ه. */
 function normBase(raw: string): string {
@@ -195,6 +199,17 @@ road rd street st avenue ave highway district tower towers center centre mall ho
 mosque church hotel bank stadium bridge square city complex building station restaurant cafe
 `);
 export const PLACE_BEFORE_ARABIC = words('الملك الامير الاميره الامام شارع طريق حي مستشفى مسجد جامع جامعه مدرسه مطار برج مركز مجمع ميدان دوار كليه');
+
+/**
+ * Al and El open a family name (Al Rashid, El Masri) but also a place or an
+ * organisation that must stay readable: Al Khobar, El Paso, Al Jazeera. The
+ * words after Al, El or ال that name one of those and not a person.
+ */
+export const PLACE_AL = words(`
+khobar ain ula hasa ahsa jubail qassim baha jouf kharj taif hofuf madinah madina medina riyadh dammam jeddah makkah mecca
+paso salvador nino niño camino jazeera arabiya qaeda alamein
+الخبر العين العلا الاحساء الحسا الجبيل القصيم الباحه الجوف الخرج الطائف الهفوف المدينه الرياض الدمام جده مكه
+`);
 
 /** One-letter Arabic prefixes that attach to a name: و and, ب with, ل for, ف so, ك like. */
 export const ARABIC_PREFIXES = 'وبلفك';
