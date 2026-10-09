@@ -19,7 +19,8 @@ const PASS = 'a passphrase used only by the hardening tests';
 const NOTES = ['Penicillin allergy', 'Rent is 850 USD'];
 // Each open attempt runs scrypt once. A hang shows up as a timeout, not as a stuck suite.
 const SLOW = { timeout: 60_000 };
-const VAULT_TS = new URL('../src/vault.ts', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+// A file URL, because the child imports it: on Windows a bare drive path is not a valid import specifier.
+const VAULT_TS = new URL('../src/vault.ts', import.meta.url).href;
 
 const dirs: string[] = [];
 after(async () => {
