@@ -46,6 +46,11 @@ const WRONG: [string, string, string][] = [
   ['tools attached', JSON.stringify({ ...parsed(), tools: [] }), 'Unexpected field.'],
   ['several answers asked for', JSON.stringify({ ...parsed(), n: 3 }), 'Unexpected field.'],
   ['a field with an empty name', JSON.stringify({ ...parsed(), '': 1 }), 'Unexpected field.'],
+  ['the same key twice, so two parsers could disagree', good.replace('{"model"', `{"model":"${FAST_MODEL}","model"`), 'Not a NOAI disclosure.'],
+  ['the exact fields in another order', JSON.stringify({ messages: parsed().messages, model: parsed().model, max_tokens: parsed().max_tokens, temperature: parsed().temperature }), 'Not a NOAI disclosure.'],
+  ['the exact fields with a space in the JSON', good.replace('"model":', '"model": '), 'Not a NOAI disclosure.'],
+  ['a temperature that is not a number', JSON.stringify({ ...parsed(), temperature: '0.2' }), 'Not a NOAI disclosure.'],
+  ['an extra field inside a message', JSON.stringify({ ...parsed(), messages: [messages()[0], { ...messages()[1], name: 'x' }] }), 'Not a NOAI disclosure.'],
 ];
 
 describe('the relay refuses what is not a NOAI disclosure', () => {
@@ -70,6 +75,7 @@ describe('the relay refuses what is not a NOAI disclosure', () => {
     const env = { NEBIUS_API_KEY: 'nb-test-key' };
     const req = (body: string): Request => new Request('https://noai.example/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
     for (const [what, body, why] of WRONG) {
+      _resetLimits();
       const res = await relay(req(body), env, upstream);
       assert.equal(res.status, 400, what);
       assert.deepEqual(await res.json(), { error: why }, what);
@@ -97,15 +103,27 @@ describe('the relay refuses what is not a NOAI disclosure', () => {
 describe('the relay logs nothing', () => {
   const core = readSource(new URL('../relay/core.mjs', import.meta.url));
 
-  it('names no console, process, logger or file call', () => {
-    for (const name of ['console', 'process', 'log', 'logger', 'logging', 'debug', 'trace', 'info', 'warn', 'stdout', 'stderr', 'write', 'writeFile', 'writeFileSync', 'appendFile', 'appendFileSync', 'createWriteStream', 'require', 'eval', 'Function']) {
+  it('names no console, process, logger, file, socket or runtime call', () => {
+    for (const name of ['console', 'process', 'log', 'logger', 'logging', 'debug', 'trace', 'info', 'warn', 'stdout', 'stderr', 'write', 'writeFile', 'writeFileSync', 'appendFile', 'appendFileSync', 'createWriteStream', 'require', 'eval', 'Function', 'Reflect', 'WebSocket', 'Deno', 'Bun', 'caches', 'localStorage', 'indexedDB']) {
       assert.equal(core.identifiers.has(name), false, `relay/core.mjs uses ${name}`);
+    }
+    assert.deepEqual(core.computed, []);
+  });
+
+  it('imports only the prompt it checks against, and names no module of Node by either spelling', () => {
+    assert.deepEqual([...core.imports.keys()], ['../src/prompt.ts']);
+    for (const s of core.strings) {
+      assert.ok(!s.startsWith('node:'), `relay/core.mjs names ${s}`);
+      assert.ok(!['fs', 'path', 'os', 'child_process', 'net', 'http', 'https', 'dns', 'tls', 'worker_threads', 'module', 'vm'].includes(s), `relay/core.mjs names ${s}`);
     }
   });
 
-  it('imports only the prompt it checks against, and nothing from Node', () => {
-    assert.deepEqual([...core.imports.keys()], ['../src/prompt.ts']);
-    for (const s of core.strings) assert.ok(!s.startsWith('node:'), `relay/core.mjs names ${s}`);
+  it('accepts only the bytes the gate writes: JSON.stringify of the parsed body, nothing else', () => {
+    assert.equal(JSON.stringify(JSON.parse(good)), good, 'the desktop body is canonical');
+    assert.equal(refuse(`${good} `), 'Not a NOAI disclosure.');
+    assert.equal(refuse(`\n${good}`), 'Not a NOAI disclosure.');
+    assert.equal(refuse(good.replace('"temperature":0.2', '"temperature":0.20')), 'Not a NOAI disclosure.');
+    assert.equal(refuse(good.replace('Sami turns 30', 'Sami turns \\u0033\\u0030')), 'Not a NOAI disclosure.');
   });
 
   it('sends only to the two hosts it exists for', () => {

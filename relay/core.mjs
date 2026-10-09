@@ -5,8 +5,9 @@
  *
  * What it does:
  *   - accepts one shape of request: a NOAI disclosure, with NOAI's own system
- *     prompt, an allowlisted Nemotron model and a bounded size. Anything else is
- *     refused, so the key cannot be borrowed as a general purpose model proxy
+ *     prompt, an allowlisted Nemotron model and a bounded size, byte for byte
+ *     as the gate writes it. Anything else is refused, so the key cannot be
+ *     borrowed as a general purpose model proxy
  *   - forwards the exact bytes it received, unparsed and unchanged, so the
  *     sha256 on the owner's receipt is the sha256 of what reached Nebius
  *   - adds the key, and returns Nebius's reply as received
@@ -58,6 +59,13 @@ export function refuse(body) {
   if (m[1]?.role !== 'user' || typeof m[1]?.content !== 'string' || !m[1].content.startsWith('PASSAGES\n')) return 'Not a NOAI disclosure.';
   const allowed = new Set(['model', 'max_tokens', 'temperature', 'messages']);
   if (Object.keys(j).some((k) => !allowed.has(k))) return 'Unexpected field.';
+  // The gate writes the body with JSON.stringify (src/prompt.ts requestBody): these four
+  // fields in this order, a numeric temperature, and role and content alone in each
+  // message. The bytes must read back to themselves, so no repeated key, spacing or
+  // escaping can mean one thing to this parser and another to the one upstream.
+  if (Object.keys(j).join() !== 'model,max_tokens,temperature,messages' || typeof j.temperature !== 'number') return 'Not a NOAI disclosure.';
+  if (m.some((x) => Object.keys(x).join() !== 'role,content')) return 'Not a NOAI disclosure.';
+  if (JSON.stringify(j) !== body) return 'Not a NOAI disclosure.';
   return null;
 }
 
