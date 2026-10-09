@@ -49,7 +49,7 @@ npm run build:web               # transpile the shared core, vendor the librarie
 npm run web                     # the browser demo and its relay on http://127.0.0.1:7791
 ```
 
-Hosting: `netlify.toml` publishes `web/app` with the relay as a function at `/api/chat` and a strict Content Security Policy (no third-party script, style or connection). `relay/Dockerfile` runs the relay alone for Nebius Serverless. Either way, give it a dedicated Nebius key with a spending cap, and set `NOAI_ALLOWED_ORIGINS` to the demo's own origin. The relay's per-client limit is best effort; the cap on the key is the real ceiling.
+Hosting: `netlify.toml` publishes `web/app` with the relay as a function at `/api/chat` and a strict Content Security Policy (no third-party script or style; the only outside connection it allows is AssemblyAI's streaming endpoint, for voice). `relay/Dockerfile` runs the relay alone for Nebius Serverless. Either way, give it a dedicated Nebius key with a spending cap, and set `NOAI_ALLOWED_ORIGINS` to the demo's own origin. The relay's per-client limit is best effort; the cap on the key is the real ceiling.
 
 ## Skills
 
@@ -76,7 +76,7 @@ npm run noai -- import "WhatsApp Chat with Sami.txt" lease.pdf notes.md contacts
 npm run noai -- people          # list, on this machine, every name that will always be hidden
 ```
 
-In the browser, **+ Import files** under the vault does the same in the tab, with the same parser. pdf.js is vendored and served from the same origin; it is given the bytes, never a URL. The browser file picker does not offer .vcf files yet; contacts import is in the command line for now.
+In the browser, **+ Import files** under the vault does the same in the tab, with the same parser. pdf.js is vendored and served from the same origin; it is given the bytes, never a URL.
 
 ## Names
 
@@ -212,7 +212,7 @@ Limits: the vault keeps keys out of the agent's context, but it is not a securit
 
 Proven by the code and the tests:
 
-- The vault file contains no readable note text (test: `vault stores nothing readable on disk`).
+- The vault file contains no readable note text (test: `stores nothing readable on disk and refuses a wrong passphrase`).
 - Only `src/gate.ts` can reach the network. A test scans every other source file and fails the build if one calls `fetch`, `https`, `net` or sockets.
 - The receipt hash equals the sha256 of the exact request body sent (test: `the receipt hash matches the exact bytes sent`).
 - Redacted values never appear in the outbound body (same test). A name is hidden everywhere in one disclosure under one placeholder, so the question and the passages agree (test: `hides a name everywhere in one disclosure, under one placeholder, even when written short`).
@@ -239,14 +239,14 @@ Not proven, stated plainly:
 
 ## Run it
 
-Requires Node 22.18 or later. One runtime dependency, onnxruntime-web, which runs the embedding model as WebAssembly with no native code. Without the model NOAI falls back to BM25 alone and says so.
+Requires Node 22.18 or later. Four runtime dependencies, none with native code: onnxruntime-web runs the embedding model as WebAssembly, pdfjs-dist reads PDFs, and @noble/hashes and @noble/curves do the browser build's cryptography. Without the model NOAI falls back to BM25 alone and says so.
 
 ```bash
 git clone https://github.com/SilentKeyTech/noai && cd noai
-npm install                     # onnxruntime-web, plus typescript for dev
+npm install                     # the four runtime dependencies, plus typescript for dev
 npm run model                   # one time: fetch the 23 MB embedding model, hash checked
 echo NEBIUS_API_KEY=your_key > .env
-npm test                        # 115 tests, no network
+npm test                        # 240 tests, no network
 npm run serve                   # http://127.0.0.1:7788
 ```
 
