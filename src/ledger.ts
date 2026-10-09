@@ -67,34 +67,47 @@ export function entryDigest(entry: Omit<LedgerEntry, 'entryHash'>): string {
   return sha256(canonical(entry));
 }
 
-/** One record per line. A line that does not parse goes through `damaged`, which keeps it in its place or drops it. */
-async function readLines<T>(path: string, damaged: (raw: string) => T | null): Promise<T[]> {
+/** The shape a chain line must have to be read as an entry. Anything else, parsed or not, is damage. */
+const isEntry = (x: unknown): x is LedgerEntry => {
+  const e = x as LedgerEntry | null;
+  return !!e && typeof e === 'object' && !Array.isArray(e) && typeof e.seq === 'number' && typeof e.prev === 'string' && typeof e.receiptId === 'string' && typeof e.entryHash === 'string';
+};
+
+/** The shape a receipt line must have: a signature and a receipt with an id. */
+const isSigned = (x: unknown): x is SignedReceipt => {
+  const r = x as SignedReceipt | null;
+  return !!r && typeof r === 'object' && typeof r.signature === 'string' && !!r.receipt && typeof r.receipt === 'object' && typeof r.receipt.receiptId === 'string';
+};
+
+/** One record per line. A line that does not parse, or parses as something else, goes through `damaged`, which keeps it in its place or drops it. */
+async function readLines<T>(path: string, keep: (x: unknown) => x is T, damaged: (raw: string) => T | null): Promise<T[]> {
   if (!existsSync(path)) return [];
   const out: T[] = [];
   for (const l of (await readFile(path, 'utf8')).split('\n')) {
     if (!l.trim()) continue;
-    let record: T | null;
+    let parsed: unknown;
     try {
-      record = JSON.parse(l) as T;
+      parsed = JSON.parse(l);
     } catch {
-      record = damaged(l);
+      parsed = undefined;
     }
+    const record = keep(parsed) ? parsed : damaged(l);
     if (record !== null) out.push(record);
   }
   return out;
 }
 
-/** A chain line that does not parse keeps its place, so the entries after it keep their numbers. Its hash is of the bytes on disk. */
+/** A chain line that is not an entry keeps its place, so the entries after it keep their numbers. Its hash is of the bytes on disk. */
 const damagedEntry = (raw: string): LedgerEntry => ({ seq: -1, prev: '', receiptId: '', at: '', model: '', payloadHash: '', payloadBytes: 0, signature: '', entryHash: sha256(raw), damaged: true });
 
-export const readLedger = (root: string): Promise<LedgerEntry[]> => readLines(ledgerPath(root), damagedEntry);
+export const readLedger = (root: string): Promise<LedgerEntry[]> => readLines(ledgerPath(root), isEntry, damagedEntry);
 /**
  * Every receipt, of every kind, in order. Typed as disclosures by default for the
  * callers that only ever wrote those; ask for SignedReceipt where secret uses may
- * be on the chain too. A receipt line that does not parse is left out, and the
+ * be on the chain too. A receipt line that is not a receipt is left out, and the
  * chain entry it belonged to then reads as having no receipt.
  */
-export const readReceipts = <T extends SignedReceipt = SignedDisclosure>(root: string): Promise<T[]> => readLines<T>(receiptsPath(root), () => null);
+export const readReceipts = <T extends SignedReceipt = SignedDisclosure>(root: string): Promise<T[]> => readLines<T>(receiptsPath(root), (x): x is T => isSigned(x), () => null);
 
 /** A crash can leave a file without its final newline. The next line must not be glued to the cut one. */
 async function lineBreak(path: string): Promise<string> {
@@ -143,7 +156,7 @@ export function append(root: string, signed: SignedReceipt): Promise<LedgerEntry
  * this against the fingerprint the owner noted when the vault was made.
  */
 export function signersOf(receipts: SignedReceipt[]): string[] {
-  return [...new Set(receipts.map((r) => sha256(unb64(r.receipt.signer)).slice(0, 16)))];
+  return [...new Set(receipts.filter(isSigned).map((r) => sha256(unb64(r.receipt.signer)).slice(0, 16)))];
 }
 
 export interface Verdict {
@@ -158,12 +171,13 @@ export interface Verdict {
  * Any edit, deletion, reorder or forged receipt breaks it at a named entry.
  */
 export function verifyLedger(entries: LedgerEntry[], receipts: SignedReceipt[]): Verdict {
-  const byId = new Map(receipts.map((r) => [r.receipt.receiptId, r]));
+  // A list read by something other than readReceipts may hold lines that are not receipts. They count, and they match no entry.
+  const byId = new Map(receipts.filter(isSigned).map((r) => [r.receipt.receiptId, r]));
   const bad = (i: number, reason: string): Verdict => ({ valid: false, length: entries.length, brokenAt: i, reason });
   let prev = GENESIS;
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i] as LedgerEntry;
-    if (e.damaged) return bad(i, `Entry ${String(i)} cannot be read. The line is damaged or was cut short.`);
+    if (!isEntry(e) || e.damaged) return bad(i, `Entry ${String(i)} cannot be read. The line is damaged or was cut short.`);
     const { entryHash, ...body } = e;
     if (e.seq !== i) return bad(i, `Entry ${String(i)} is numbered ${String(e.seq)}. A disclosure was removed or reordered.`);
     if (e.prev !== prev) return bad(i, `Entry ${String(i)} does not follow the one before it. The log was cut or spliced.`);
