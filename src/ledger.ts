@@ -73,10 +73,10 @@ const isEntry = (x: unknown): x is LedgerEntry => {
   return !!e && typeof e === 'object' && !Array.isArray(e) && typeof e.seq === 'number' && typeof e.prev === 'string' && typeof e.receiptId === 'string' && typeof e.entryHash === 'string';
 };
 
-/** The shape a receipt line must have: a signature and a receipt with an id. */
+/** The shape a receipt line must have: a signature and a receipt with an id and a signer. */
 const isSigned = (x: unknown): x is SignedReceipt => {
   const r = x as SignedReceipt | null;
-  return !!r && typeof r === 'object' && typeof r.signature === 'string' && !!r.receipt && typeof r.receipt === 'object' && typeof r.receipt.receiptId === 'string';
+  return !!r && typeof r === 'object' && typeof r.signature === 'string' && !!r.receipt && typeof r.receipt === 'object' && typeof r.receipt.receiptId === 'string' && typeof r.receipt.signer === 'string';
 };
 
 /** One record per line. A line that does not parse, or parses as something else, goes through `damaged`, which keeps it in its place or drops it. */

@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { newId, scrub, sha256 } from '../src/crypto.ts';
-import { append, ledgerPath, readLedger, readReceipts, receiptsPath, signDisclosure, verifyLedger } from '../src/ledger.ts';
+import { append, ledgerPath, readLedger, readReceipts, receiptsPath, signDisclosure, signersOf, verifyLedger } from '../src/ledger.ts';
 import type { DisclosureReceipt, SignedDisclosure } from '../src/types.ts';
 import { createVault, type OpenVault, unwrapPrivateKey } from '../src/vault.ts';
 
@@ -139,6 +139,17 @@ describe('a line cut short on disk', () => {
       assert.equal(verifyLedger(await readLedger(root), [...receipts, JSON.parse(line)] as never).brokenAt, 1, 'a verifier handed the raw list must not throw either');
     });
   }
+
+  it('in the receipts file, a receipt with no signer is left out, so the signer list does not throw', async () => {
+    const { root, v } = await vault();
+    await append(root, receipt(v, 1));
+    await appendFile(receiptsPath(root), '{"receipt":{"receiptId":"abc"},"signature":"y"}\n');
+    const receipts = await readReceipts(root);
+    assert.equal(receipts.length, 1);
+    assert.equal(signersOf(receipts).length, 1);
+    assert.equal(signersOf([...receipts, JSON.parse('{"receipt":{"receiptId":"abc"},"signature":"y"}')] as never).length, 1, 'a verifier handed the raw list must not throw either');
+    assert.equal(verifyLedger(await readLedger(root), receipts).valid, true);
+  });
 
   it('does not change what an intact ledger reads as', async () => {
     const { root, v } = await vault();
