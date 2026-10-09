@@ -1,0 +1,56 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      # The embedding model is fetched from Hugging Face and checked against the
+      # hashes pinned in src/embed.ts. It is cached by the script that fetches it
+      # and the file that pins it, so a new model version makes a new cache.
+      - name: Restore the embedding model
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: model-${{ hashFiles('scripts/fetch-model.ts', 'src/embed.ts') }}
+
+      # Already-present files that match their hash are skipped, so this is a
+      # no-op on a cache hit. When the download is unavailable the job goes on
+      # and the embedding tests skip, as they do on a machine without the model.
+      - name: Fetch the embedding model
+        id: fetch
+        run: npm run model
+        continue-on-error: true
+
+      - name: Drop a partial model so the suite skips instead of failing
+        if: steps.fetch.outcome != 'success'
+        run: rm -rf models
+
+      - run: npm run typecheck
+
+      - run: npm test

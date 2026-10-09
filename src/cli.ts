@@ -113,7 +113,8 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      console.log('noai init | seed | add <title> <text> | import <file...> | remember <fact> | people | ask <question> | tape | verify | serve');
+      console.error('noai init | seed | add <title> <text> | import <file...> | remember <fact> | people | ask <question> | tape | verify | serve');
+      process.exitCode = 1;
   }
 }
 
