@@ -14,8 +14,10 @@ import { readSource, type Source } from './source.ts';
 const root = new URL('../', import.meta.url);
 const SERVERS = ['src/server.ts', 'src/gateway-serve.ts', 'src/mcp-serve.ts'];
 
-/** Globals that send or receive bytes, and the ways round a name: eval, Function, Reflect, process.binding, createRequire. */
-const NET_GLOBALS = ['fetch', 'WebSocket', 'XMLHttpRequest', 'sendBeacon', 'EventSource', 'eval', 'Function', 'Reflect', 'binding', 'createRequire', 'Worker'];
+/** Globals that send or receive bytes, and the ways round a name: eval, Function, Reflect, process.binding, createRequire, getBuiltinModule, dlopen, property descriptors. */
+const NET_GLOBALS = ['fetch', 'WebSocket', 'XMLHttpRequest', 'sendBeacon', 'EventSource', 'eval', 'Function', 'Reflect', 'binding', 'createRequire', 'Worker', 'getBuiltinModule', 'dlopen', 'getOwnPropertyDescriptor', 'getOwnPropertyDescriptors'];
+/** In src/ nothing but the gate has any business with the global object itself: a name looked up on it is a name not written down. */
+const GLOBAL_OBJECTS = ['globalThis', 'window', 'self', 'global'];
 /** Modules that open a socket, start a process or load a module by name. */
 const NET_MODULES = [
   'node:http', 'node:https', 'node:net', 'node:tls', 'node:dgram', 'node:http2', 'http', 'https', 'net', 'tls', 'dgram', 'http2', 'undici', 'ws', 'axios', 'node-fetch',
@@ -27,9 +29,10 @@ const CODE = /\.(?:ts|mts|cts|js|mjs|cjs)$/;
  * Which of the forbidden names a file uses, as "name", "import x" or "string 'x'".
  * A server may import createServer from node:http, and only that: it listens, it does not call out.
  */
-function reaches(s: Source, server = false): string[] {
+function reaches(s: Source, server = false, globals = false): string[] {
   const found: string[] = [];
   for (const g of NET_GLOBALS) if (s.identifiers.has(g)) found.push(g);
+  if (globals) for (const g of GLOBAL_OBJECTS) if (s.identifiers.has(g)) found.push(g);
   for (const m of NET_MODULES) {
     const names = s.imports.get(m);
     if (names && !(server && m === 'node:http' && names.every((n) => n === 'createServer'))) found.push(`import ${m}`);
@@ -56,7 +59,7 @@ describe('only the gate touches the network', () => {
     for (const path of files(new URL('src/', root), CODE)) {
       const name = path.slice(root.pathname.length);
       if (name === 'src/gate.ts') continue;
-      const found = reaches(readSource(path), SERVERS.includes(name));
+      const found = reaches(readSource(path), SERVERS.includes(name), true);
       if (found.length) offenders.push(`${name}: ${found.join(', ')}`);
     }
     assert.deepEqual(offenders, []);
@@ -67,7 +70,7 @@ describe('only the gate touches the network', () => {
     for (const name of SERVERS) {
       const s = readSource(new URL(name, root));
       assert.deepEqual(s.imports.get('node:http'), ['createServer'], `${name} imports more than createServer from node:http`);
-      assert.deepEqual(reaches(s, true), [], name);
+      assert.deepEqual(reaches(s, true, true), [], name);
       assert.deepEqual(reaches(s), ['import node:http'], `${name} would be caught anywhere else`);
     }
   });
@@ -76,7 +79,7 @@ describe('only the gate touches the network', () => {
     const s = readSource(new URL('src/gate.ts', root));
     for (const m of ['node:http', 'node:https', 'node:net', 'node:tls']) assert.equal(s.imports.has(m), false, `gate.ts imports ${m}`);
     assert.equal(s.identifiers.has('createServer'), false);
-    for (const g of ['eval', 'Function', 'Reflect', 'binding', 'createRequire', 'Worker']) assert.equal(s.identifiers.has(g), false, g);
+    for (const g of ['eval', 'Function', 'Reflect', 'binding', 'createRequire', 'Worker', 'getBuiltinModule', 'dlopen', 'getOwnPropertyDescriptor']) assert.equal(s.identifiers.has(g), false, g);
     assert.deepEqual(s.computed, []);
   });
 
@@ -139,9 +142,11 @@ describe('only the gate touches the network', () => {
 
   it('the scanner catches a name that is built rather than spelled out', () => {
     const s = readSource(new URL('fixtures/net-probe-built.ts', import.meta.url));
-    assert.deepEqual(s.computed, ['computed property of (globalThis as any)', 'import() of a computed specifier', 'computed property of (globalThis as any)', 'import() of a computed specifier']);
+    assert.deepEqual(s.computed, ['computed property of (globalThis as any)', 'import() of a computed specifier', 'computed property of (globalThis as any)', 'import() of a computed specifier', 'import.meta.resolve']);
     assert.ok(reaches(s).includes('eval') && reaches(s).includes('Function') && reaches(s).includes('Reflect') && reaches(s).includes('binding'));
     assert.ok(reaches(s).includes('import node:child_process') && reaches(s).includes('import node:worker_threads') && reaches(s).includes('import node:dns'));
     assert.ok(reaches(s).includes("string 'http'"), 'createRequire of http');
+    assert.ok(reaches(s, false, true).includes('globalThis') && reaches(s, false, true).includes('self'), 'the global object itself');
+    assert.ok(reaches(s).includes('getBuiltinModule') && reaches(s).includes('dlopen') && reaches(s).includes('getOwnPropertyDescriptor'));
   });
 });

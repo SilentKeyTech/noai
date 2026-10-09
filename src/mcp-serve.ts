@@ -156,7 +156,7 @@ export interface AppServerOptions {
  * DNS rebinding), only the NOAI window (its token), and never with a key's value.
  */
 export function createAppServer(opts: AppServerOptions): Server {
-  const self = [`127.0.0.1:${String(opts.port)}`, `localhost:${String(opts.port)}`];
+  const ownHosts = [`127.0.0.1:${String(opts.port)}`, `localhost:${String(opts.port)}`];
   const ctxFor = (): McpContext | null =>
     opts.state.vault ? { vault: opts.state.vault, cfg: configFromEnv(opts.state.root), reveal: [], toolset: 'vault' } : null;
   let token: { vault: OpenVault; value: string } | null = null;
@@ -180,7 +180,7 @@ export function createAppServer(opts: AppServerOptions): Server {
       token = null; // re-read after a lock, unlock or rotate
       return mcp(req, res);
     }
-    if (!self.includes(String(req.headers.host ?? ''))) return send(res, 421, { error: 'Wrong host.' });
+    if (!ownHosts.includes(String(req.headers.host ?? ''))) return send(res, 421, { error: 'Wrong host.' });
     if (path === '/' || path === '/app') return send(res, 302, undefined, { location: '/app/' });
 
     if (path.startsWith('/app/')) {
@@ -194,7 +194,7 @@ export function createAppServer(opts: AppServerOptions): Server {
 
     if (path.startsWith('/api/')) {
       const origin = req.headers.origin;
-      if (origin && !self.some((h) => origin === `http://${h}`)) return send(res, 403, { error: 'Origin not allowed.' });
+      if (origin && !ownHosts.some((h) => origin === `http://${h}`)) return send(res, 403, { error: 'Origin not allowed.' });
       const given = Buffer.from(String(req.headers['x-noai-ui'] ?? ''), 'utf8');
       if (given.length !== ui.length || !timingSafeEqual(given, ui)) return send(res, 401, { error: 'Open NOAI from the Start menu.' });
       let body: unknown = {};
