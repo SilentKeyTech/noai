@@ -114,6 +114,19 @@ describe('structured kinds the audit found missing', () => {
     const ssh = 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW';
     assert.equal(hides(`key ${ssh} end`, ['b3BlbnNzaC1rZXktdjEAAAAABG5vbmU'], 'SECRET').text, 'key [SECRET_1] end');
   });
+  it('hides a private key that follows a certificate whose END line is missing, or that sits inside one', () => {
+    const key = `-----BEGIN RSA PRIVATE KEY-----\n${B64}\n-----END RSA PRIVATE KEY-----`;
+    const bundles = [
+      `-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUYJmQ${B64.slice(24)}\n${key}`,
+      `-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUYJmQ${B64.slice(24)}\n${key}\n-----END CERTIFICATE-----`,
+      `-----BEGIN CERTIFICATE-----\nMIIBszCC\n\n-----BEGIN PRIVATE KEY-----\n${B64}\n-----END PRIVATE KEY-----`,
+    ];
+    for (const text of bundles) {
+      const r = redact(text);
+      assert.ok(!r.text.includes(B64) && !r.text.includes('BEGIN RSA PRIVATE') && !r.text.includes('BEGIN PRIVATE KEY'), r.text);
+      assert.ok((r.counts.SECRET ?? 0) >= 1, r.text);
+    }
+  });
   it('hides a PGP private key block like a PEM one', () => {
     const pgp = `-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOYBF${B64.slice(6)}\n=abcd\n-----END PGP PRIVATE KEY BLOCK-----`;
     assert.equal(hides(`key\n${pgp}\nend`, ['lQOYBF', 'BEGIN PGP'], 'SECRET').text, 'key\n[SECRET_1]\nend');
@@ -180,7 +193,7 @@ describe('Arabic al- family names', () => {
     assert.deepEqual(redact(places).counts, {}, redact(places).text);
     assert.equal(redact('Al Rashid called.').text, '[PERSON_1] called.');
     assert.equal(redact('Ask Mr. Al Rashid and Al Gore.').text, 'Ask Mr. [PERSON_1] and [PERSON_2].');
-    assert.equal(redact('أحمد الرياض اتصل').text, '[PERSON_1] الرياض اتصل', 'a city after a given name is not a family name');
+    assert.equal(redact('أحمد الرياض اتصل').text, '[PERSON_1] اتصل', 'after a given name a city word is part of the name, as Ahmad Al Riyadh would be');
   });
   it('LIMIT: a bare Arabic ال- family name is an ordinary word until the vault knows the person', () => {
     assert.deepEqual(redact('الرشيد اتصل').counts, {});
@@ -226,6 +239,36 @@ describe('found in review: what the invisible characters still let through', () 
     assert.equal(rehydrate(r.text, r.map), 'call \u200B0551234567\u200B now');
     const name = redact('\uFEFFSami called');
     assert.equal(name.text, '\uFEFF[PERSON_1] called');
+  });
+});
+
+describe('found in the second review: the two readings must agree with each other', () => {
+  it('hides a name learned from a text with invisible characters in a text without them, in either order', () => {
+    for (const texts of [['Haddad paid.', 'Sami\u200BHaddad called.'], ['Sami\u200BHaddad called.', 'Haddad paid.']]) {
+      const r = redactAll(texts);
+      assert.deepEqual(r.texts, texts.map((t) => (t.startsWith('Haddad') ? '[PERSON_1] paid.' : '[PERSON_1] called.')), JSON.stringify(texts));
+      assert.deepEqual(r.counts, { PERSON: 1 });
+    }
+  });
+  it('keeps two phones that only an invisible character separates as two values', () => {
+    const r = redact('call 0551234567\u200B0551234568 now');
+    assert.equal(r.text, 'call [PHONE_1]\u200B[PHONE_2] now');
+    assert.equal(r.map.get('[PHONE_1]'), '0551234567');
+    assert.equal(r.map.get('[PHONE_2]'), '0551234568');
+  });
+  it('numbers a company once when the two readings spell its name differently', () => {
+    const r = redact('Sandpiper\u200BFitout Co. signed; Sandpiper agreed.');
+    assert.equal(r.text, '[COMPANY_1] signed; [COMPANY_1] agreed.');
+    assert.deepEqual(r.counts, { COMPANY: 1 });
+  });
+  it('learns the spelling with more words when the two readings cover the same span', () => {
+    assert.deepEqual(findPeople('Mr. Al\u200BRashid called.'), ['Al Rashid']);
+    assert.deepEqual(findPeople('Dr. Zorbek\u200BTamarind called.'), ['Zorbek Tamarind']);
+  });
+  it('lets a city word continue a name after a given name in Arabic, as it does in Latin script', () => {
+    assert.equal(redact('أحمد الخبر اتصل').text, '[PERSON_1] اتصل');
+    assert.equal(redact('Ahmad Al Khobar called.').text, '[PERSON_1] called.');
+    assert.deepEqual(redact('الخبر والعلا والأحساء والطائف.').counts, {});
   });
 });
 
