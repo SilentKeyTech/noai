@@ -20,6 +20,7 @@ import {
   CUE_LATIN_RELATION,
   CUE_LATIN_TITLE,
   GIVEN_LATIN,
+  INVISIBLE,
   POSSESSIVE_LATIN,
   STOP_ARABIC,
   STOP_LATIN,
@@ -49,7 +50,7 @@ const isLead = (n: string, ar: boolean): boolean =>
  * label with no name in it ("Mom", "pizza place", a phone number) gives null.
  */
 export function cleanName(raw: string): string | null {
-  const words = [...raw.normalize('NFKC').matchAll(WORD)].map((m) => m[0]);
+  const words = [...raw.normalize('NFKC').replace(INVISIBLE, '').matchAll(WORD)].map((m) => m[0]);
   while (words.length > 0) {
     const w = words[0]!;
     if (!isLead(normToken(w), ARABIC.test(w))) break;
@@ -88,7 +89,7 @@ function namePart(w: string): boolean {
 
 /** The name at one end of a phrase: "my cousin Hamoudi" -> "Hamoudi", "Mohammed Haddad who lives" -> "Mohammed Haddad". */
 function nameAtEnd(phrase: string, end: 'start' | 'end'): string | null {
-  const all = [...phrase.normalize('NFKC').matchAll(WORD)].map((m) => m[0]);
+  const all = [...phrase.normalize('NFKC').replace(INVISIBLE, '').matchAll(WORD)].map((m) => m[0]);
   const words = end === 'end' ? [...all].reverse() : all;
   const kept: string[] = [];
   for (const w of words) {

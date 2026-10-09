@@ -9,9 +9,16 @@
  * actually appears in notes.
  */
 
+/**
+ * Characters that take no space on screen: zero width space, non-joiner and
+ * joiner, word joiner, byte order mark, soft hyphen. Typed into a name they
+ * split it into pieces no list matches, so names are compared without them.
+ */
+export const INVISIBLE = /[\u00AD\u200B-\u200D\u2060\uFEFF]/g;
+
 /** Arabic letters are compared without diacritics or tatweel, with every alef form as ا and ة as ه. */
 function normBase(raw: string): string {
-  const s = raw.normalize('NFKC');
+  const s = raw.normalize('NFKC').replace(INVISIBLE, '');
   if (/[\u0600-\u06FF]/.test(s)) {
     return s
       .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
