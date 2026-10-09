@@ -100,12 +100,18 @@ function ibanChecks(s: string): boolean {
  */
 function isDate(m: string): boolean {
   const s = m.trim();
-  return /^\d{4}-\d{1,2}-\d{1,2}$/.test(s) || /^\d{1,2}[./-]\d{1,2}[./-]\d{4}$/.test(s);
+  return /^\d{4}[./-]\d{1,2}[./-]\d{1,2}$/.test(s) || /^\d{1,2}[./-]\d{1,2}[./-]\d{4}$/.test(s);
 }
 
 const noPlaceholder = (m: string): boolean => !/\[[A-Z]+_\d+\]/.test(m);
 
-const NUMERIC_DATE = String.raw`(?:\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}-\d{1,2}-\d{1,2})`;
+/**
+ * A Hijri date is written year first with slashes (1388/06/15) and often ends
+ * in هـ or AH. Found in a test on 9 Oct 2026: a Saudi patient's Hijri date of
+ * birth was sent as written.
+ */
+const HIJRI_MARK = String.raw`(?:\s?(?:هـ|ه(?![؀-ۿ])|A\.?H\.?(?![A-Za-z])|H(?![A-Za-z])))?`;
+const NUMERIC_DATE = String.raw`(?:(?:\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})${HIJRI_MARK})`;
 const WRITTEN_DATE = String.raw`(?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9},?\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4})`;
 const DOB = new RegExp(String.raw`(?<=\b(?:born(?:\s+on)?|date\s+of\s+birth|d\.?o\.?b\.?|birth\s*date)\s*[:\-]?\s*|(?:تاريخ الميلاد|مولود|مولودة|ولدت|تاريخ ميلاد[ةه]?)(?:\s+في)?\s*[:\-]?\s*)(?:${NUMERIC_DATE}|${WRITTEN_DATE})`, 'gi');
 
@@ -113,14 +119,64 @@ const ADDRESS_CODE = /\b[A-Z]{4}\d{4}\b/g;
 const ADDRESS_STREET = /\b\d{1,5}\s+(?:[A-Z][\w'-]*\s+){1,3}(?:Street|St|Road|Rd|Avenue|Ave|Boulevard|Blvd|Lane|Ln|Drive|Dr|Way)\b\.?(?:,?\s+(?:[A-Z][\w'-]*\s*){1,3})?/g;
 const ADDRESS_CUED = /(?<=\b(?<!e-?mail |ip |web |mac )(?:(?:my|our|his|her|their|home|work|office|delivery|shipping|billing|mailing|street|postal|postal code|zip code|po box)\s+address\s*(?:is|:)?|lives?\s+at|living\s+at|resides?\s+at|located\s+at|p\.?o\.?\s*box|postal\s+code|zip\s+code)\s*[:\-]?\s*)[^\n.;!?]{4,80}/gi;
 const ADDRESS_CUED_ARABIC = /(?<=(?:العنوان|عنواني|ص\.?\s?ب\.?|الرمز البريدي|رقم المبنى|يسكن في|تسكن في|اسكن في|أسكن في)\s*[:\-]?\s*)[^\n.؛!؟]{3,60}/g;
+/** A plot, building, villa or flat number: "Plot 77", "Villa No. 3", "قطعة رقم 77". Found sent as written in a site address on 9 Oct 2026. */
+const ADDRESS_UNIT = /\b(?:Plot|Building|Bldg\.?|Villa|Apartment|Apt\.?|Flat)\s+(?:No\.?\s*|#\s*)?\d{1,5}[A-Za-z]?\b/g;
+const ADDRESS_UNIT_ARABIC = /(?<![؀-ۿ])(?:قطعة|القطعة|مبنى|فيلا|شقة)\s+(?:رقم\s+)?\d{1,5}/g;
+/** A Saudi postal code after the city it belongs to: "Riyadh 13521". */
+const SAUDI_CITY = 'Riyadh|Jeddah|Jiddah|Makkah|Mecca|Madinah|Medina|Dammam|Khobar|Al Khobar|Dhahran|Taif|Tabuk|Abha|Buraidah|Buraydah|Hail|Jazan|Jizan|Najran|Jubail|Yanbu|Qatif|Hofuf|Al Ahsa|Khamis Mushait';
+const ADDRESS_POSTAL = new RegExp(String.raw`(?<=\b(?:${SAUDI_CITY}),?\s+)\d{5}(?:-\d{4})?\b`, 'g');
+
+/**
+ * A number that a label says is a record of someone: a medical record or file
+ * number, an insurance policy, a commercial registration, a VAT number. Before
+ * 9 Oct 2026 these were hidden only when they looked like a phone, and then the
+ * model was told they were phones. Five digits at least, so "VAT 2026" stays.
+ */
+const RECORD_CUE_LATIN = String.raw`MRN|medical\s+record(?:\s+(?:number|no\.?))?|(?:patient|file|case|chart)\s+(?:number|no\.?|id)|insurance(?:\s+policy)?\s+(?:number|no\.?|id)|policy(?:\s+(?:number|no\.?))?|member(?:ship)?\s+(?:number|no\.?|id)|CR(?:\s+(?:number|no\.?))?|commercial\s+registration(?:\s+(?:number|no\.?))?|VAT(?:\s+registration)?(?:\s+(?:number|no\.?))?|tax\s+(?:id|number|no\.?)|TIN|account\s+(?:number|no\.?)`;
+const RECORD_CUE_ARABIC = String.raw`رقم الملف الطبي|رقم الملف|رقم المريض|رقم السجل الطبي|السجل التجاري|سجل تجاري|الرقم الضريبي|رقم البوليصة|رقم الوثيقة|رقم التأمين|رقم العضوية|رقم الحساب`;
+const RECORD = new RegExp(String.raw`(?:(?<=\b(?:${RECORD_CUE_LATIN})\s*[:#]?\s*)|(?<=(?:${RECORD_CUE_ARABIC})\s*[:#]?\s*))[A-Za-z]{0,3}\d[\dA-Za-z/-]{3,24}(?![\dA-Za-z])`, 'gi');
+const recordOk = (m: string): boolean => m.replace(/\D/g, '').length >= 5 && noPlaceholder(m);
+
+/**
+ * A hospital or clinic says where someone is treated. "King Fahad Medical City"
+ * was sent as written on 9 Oct 2026. Found by the word that ends the name in
+ * English, and by مستشفى, مستوصف, عيادة and the like in Arabic.
+ */
+const FACILITY_LATIN = /\b(?:(?!(?:The|A|An|Our|My|His|Her|Their|This|At|In|To|From)\s)[A-Z][\w'’-]*\s+){1,5}(?:Medical\s+City|Medical\s+(?:Center|Centre|Complex)|(?:Specialist\s+|General\s+|Children'?s\s+|Maternity\s+)?Hospital|Polyclinic|Clinics?|Health\s+(?:Center|Centre))\b/g;
+const FACILITY_ARABIC = /(?<![؀-ۿ])[وبلف]?(?:مستشفى|مستوصف|عيادة|عيادات|مجمع عيادات|مدينة الملك|مدينة الأمير|مدينة الامير)(?:\s+(?:ال|لل)[؀-ۿ]+|\s+(?<=(?:الملك|الأمير|الامير|الملكة|مدينة الملك|مدينة الأمير|مدينة الامير)\s+)[؀-ۿ]+){1,4}/g;
 
 const MEDICAL_TERMS = [
-  'diabetes', 'diabetic', 'hypertension', 'high blood pressure', 'cancer', 'chemotherapy', 'leukemia', 'leukaemia', 'HIV', 'hepatitis',
-  'asthma', 'epilepsy', 'depression', 'anxiety disorder', 'bipolar', 'schizophrenia', 'ADHD', 'autism', 'PTSD', 'pregnant', 'pregnancy', 'miscarriage',
-  'dialysis', 'kidney failure', 'heart disease', 'heart attack', 'migraine', 'arthritis', 'tuberculosis', 'insulin', 'metformin',
+  // conditions; longer forms first, so "type 2 diabetes mellitus" is one value
+  String.raw`(?:type\s*[12]\s+)?diabetes(?:\s+mellitus)?`, 'diabetic', 'hypertension', 'high blood pressure', 'high cholesterol', 'hyperlipid(?:a)?emia',
+  'cancer', 'chemotherapy', 'radiotherapy', 'leuk(?:a)?emia', 'lymphoma', 'melanoma', 'carcinoma', 'metasta(?:sis|tic)', 'tumou?rs?', 'biopsy', 'mastectomy',
+  'HIV', 'hepatitis(?:\s+[ABC])?', 'cirrhosis', 'tuberculosis', 'syphilis', 'gonorrh(?:o)?ea', 'herpes', 'HPV', 'sexually transmitted',
+  'asthma', 'COPD', 'pneumonia', 'epilepsy', 'dementia', "Alzheimer'?s", "Parkinson'?s", 'multiple sclerosis', 'lupus',
+  'depression', 'anxiety disorder', 'bipolar', 'schizophrenia', 'OCD', 'ADHD', 'autism', 'PTSD', 'anorexia', 'bulimia', 'eating disorder',
+  'addiction', 'alcoholism', 'overdose', 'suicidal', 'self-harm',
+  'pregnant', 'pregnancy', 'miscarriage', 'abortion', 'infertility', 'IVF',
+  'dialysis', 'kidney failure', 'renal failure', 'chronic kidney disease', 'CKD', '(?:diabetic\\s+)?(?:nephropathy|neuropathy|retinopathy)', 'transplant',
+  'heart failure', 'heart disease', 'heart attack', 'coronary artery disease', 'atrial fibrillation', 'angina',
+  'hypothyroidism', 'hyperthyroidism', 'an(?:a)?emia', 'sickle cell(?:\\s+disease)?', 'thalass(?:a)?emia', 'obesity', 'osteoporosis',
+  "Crohn'?s(?:\\s+disease)?", 'ulcerative colitis', 'celiac disease', 'coeliac disease', 'psoriasis', 'migraine', 'arthritis', 'gout',
+  // medicines whose name tells what someone has
+  'insulin', 'metformin', 'empagliflozin', 'dapagliflozin', 'sitagliptin', 'gliclazide', 'glimepiride', 'semaglutide', 'liraglutide', 'tirzepatide',
+  'Ozempic', 'Mounjaro', 'Jardiance', 'Januvia',
+  'atorvastatin', 'rosuvastatin', 'simvastatin', 'amlodipine', 'lisinopril', 'losartan', 'valsartan', 'bisoprolol', 'metoprolol', 'furosemide',
+  'warfarin', 'apixaban', 'rivaroxaban', 'clopidogrel', 'levothyroxine', 'salbutamol', 'Ventolin', 'prednisolone', 'methotrexate', 'adalimumab', 'Humira',
+  'tamoxifen', 'letrozole', 'clomiphene', 'sertraline', 'fluoxetine', 'escitalopram', 'citalopram', 'paroxetine', 'venlafaxine', 'duloxetine',
+  'bupropion', 'mirtazapine', 'quetiapine', 'olanzapine', 'risperidone', 'aripiprazole', 'lithium', 'valproate', 'lamotrigine', 'levetiracetam',
+  'carbamazepine', 'methylphenidate', 'Ritalin', 'Concerta', 'diazepam', 'alprazolam', 'Xanax', 'lorazepam', 'clonazepam', 'tramadol',
+  'morphine', 'oxycodone', 'methadone', 'buprenorphine', 'naltrexone', 'sildenafil', 'Viagra', 'tadalafil', 'antiretrovirals?',
   'antidepressants?', 'antipsychotics?',
 ].join('|');
-const MEDICAL_ARABIC = ['سكري', 'سرطان', 'ربو', 'صرع', 'اكتئاب', 'فصام', 'إيدز', 'ايدز', 'الفشل الكلوي', 'التهاب الكبد', 'حامل', 'غسيل الكلى', 'جلطة', 'ارتفاع الضغط', 'ضغط الدم'].join('|');
+const MEDICAL_ARABIC = [
+  'سكري', 'سرطان', 'أورام', 'ورم', 'ربو', 'صرع', 'اكتئاب', 'فصام', 'ثنائي القطب', 'الوسواس القهري', 'إيدز', 'ايدز', 'نقص المناعة',
+  'الفشل الكلوي', 'غسيل الكلى', 'زراعة الكلى', 'اعتلال الكلى', 'اعتلال الأعصاب', 'اعتلال الشبكية', 'التهاب الكبد', 'تليف الكبد',
+  'حامل', 'إجهاض', 'اجهاض', 'عقم', 'جلطة', 'سكتة دماغية', 'ذبحة صدرية', 'قصور القلب', 'ارتفاع ضغط الدم', 'ارتفاع الضغط', 'ضغط الدم',
+  'الزهايمر', 'زهايمر', 'باركنسون', 'خرف', 'التصلب المتعدد', 'الذئبة', 'فقر الدم', 'أنيميا', 'انيميا', 'الأنيميا المنجلية', 'ثلاسيميا',
+  'قصور الغدة الدرقية', 'فرط نشاط الغدة الدرقية', 'سمنة', 'هشاشة العظام', 'صدفية', 'إدمان', 'ادمان', 'انتحار',
+  'أنسولين', 'انسولين', 'إنسولين', 'ميتفورمين',
+].join('|');
 const MEDICAL = new RegExp(String.raw`(?<![\p{L}])(?:${MEDICAL_TERMS})(?![\p{L}])|(?<![\p{L}])(?:[والفب]?(?:ال)?)(?:${MEDICAL_ARABIC})(?![\p{L}])`, 'giu');
 
 /**
@@ -157,6 +213,8 @@ const RULES: Rule[] = [
   { kind: 'EMAIL', pattern: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
   { kind: 'IBAN', pattern: IBAN, accept: ibanOk, shrink: ibanShrink },
   { kind: 'CARD', pattern: /\b(?:\d[ -]?){13,19}\b/g, accept: luhn },
+  // A labelled record number (MRN, policy, CR, VAT) before ID and PHONE, so the model is told what it is.
+  { kind: 'RECORD', pattern: RECORD, accept: recordOk },
   { kind: 'ID', pattern: /(?<![\d+])[12]\d{9}(?!\d)/g },
   // A date of birth: only a full date with a year, and only after a cue. A birthday
   // with no year ("turns 30 on 22 November") stays readable, a reminder needs it.
@@ -167,6 +225,12 @@ const RULES: Rule[] = [
   { kind: 'ADDRESS', pattern: ADDRESS_STREET, accept: noPlaceholder },
   { kind: 'ADDRESS', pattern: ADDRESS_CUED, accept: noPlaceholder },
   { kind: 'ADDRESS', pattern: ADDRESS_CUED_ARABIC, accept: noPlaceholder },
+  { kind: 'ADDRESS', pattern: ADDRESS_UNIT },
+  { kind: 'ADDRESS', pattern: ADDRESS_UNIT_ARABIC },
+  { kind: 'ADDRESS', pattern: ADDRESS_POSTAL },
+  // Where someone is treated: a hospital or clinic by name.
+  { kind: 'FACILITY', pattern: FACILITY_LATIN, accept: noPlaceholder },
+  { kind: 'FACILITY', pattern: FACILITY_ARABIC, accept: noPlaceholder },
   { kind: 'MEDICAL', pattern: MEDICAL },
   { kind: 'PASSPORT', pattern: /\b[A-Z]{1,2}\d{6,8}\b/g },
   { kind: 'PHONE', pattern: /(?<![\w])\+?\d[\d\s().-]{6,}\d(?![\w])/g, accept: (m) => m.replace(/\D/g, '').length >= 8 && !isDate(m), key: (m) => m.replace(/[^\d+]/g, '') },
