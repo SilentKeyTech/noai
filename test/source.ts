@@ -45,6 +45,7 @@ export function readSource(path: string | URL): Source {
     }
     const literal = (n: ts.Node | undefined): boolean => !!n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n));
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && !literal(node.arguments[0])) out.computed.push('import() of a computed specifier');
+    if (ts.isPropertyAccessExpression(node) && ts.isMetaProperty(node.expression) && node.name.text === 'resolve') out.computed.push('import.meta.resolve');
     if (ts.isElementAccessExpression(node) && !literal(node.argumentExpression)) {
       const target = node.expression.getText();
       if (/^(?:\(.*\))?\s*(?:globalThis|window|self|global)\b/.test(target) || /\bas any\)$/.test(target)) out.computed.push(`computed property of ${target.replace(/\s+/g, ' ')}`);
