@@ -7,11 +7,14 @@
  */
 import assert from 'node:assert/strict';
 import { readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { readSource, type Source } from './source.ts';
 
 const root = new URL('../', import.meta.url);
+/** The path of a file relative to a directory, written with forward slashes on every platform. */
+const under = (dir: URL, path: string): string => relative(fileURLToPath(dir), path).split('\\').join('/');
 const SERVERS = ['src/server.ts', 'src/gateway-serve.ts', 'src/mcp-serve.ts'];
 
 /** Globals that send or receive bytes. */
@@ -38,7 +41,7 @@ function reaches(s: Source, server = false): string[] {
 function files(dir: URL, ext: RegExp): string[] {
   const out: string[] = [];
   for (const f of readdirSync(dir)) {
-    const p = join(dir.pathname, f);
+    const p = join(fileURLToPath(dir), f);
     if (statSync(p).isDirectory()) out.push(...files(new URL(`${f}/`, dir), ext));
     else if (ext.test(f)) out.push(p);
   }
@@ -49,7 +52,7 @@ describe('only the gate touches the network', () => {
   it('src/gate.ts is the one file in src/ that sends anything', () => {
     const offenders: string[] = [];
     for (const path of files(new URL('src/', root), /\.ts$/)) {
-      const name = path.slice(root.pathname.length);
+      const name = under(root, path);
       if (name === 'src/gate.ts') continue;
       const found = reaches(readSource(path), SERVERS.includes(name));
       if (found.length) offenders.push(`${name}: ${found.join(', ')}`);
@@ -77,7 +80,7 @@ describe('only the gate touches the network', () => {
     const lib = new URL('web/app/lib/', root);
     const offenders: string[] = [];
     for (const path of files(lib, /\.js$/)) {
-      const name = path.slice(lib.pathname.length);
+      const name = under(lib, path);
       const s = readSource(path);
       const found = reaches(s);
       if (name === 'gate.js') {
