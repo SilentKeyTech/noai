@@ -125,7 +125,10 @@ describe('redaction of names and Saudi identifiers', () => {
 
   it('keeps places named after people, and hides passport numbers', () => {
     assert.deepEqual(redact('The King Fahd Road office, near Prince Sultan University.').counts, {});
-    assert.deepEqual(redact('موعد في مستشفى الملك فيصل، شارع الأمير محمد').counts, {});
+    // Since 9 Oct 2026 a hospital is hidden as where someone is treated (FACILITY), never as a person. The street stays.
+    const h = redact('موعد في مستشفى الملك فيصل، شارع الأمير محمد');
+    assert.deepEqual(h.counts, { FACILITY: 1 });
+    assert.match(h.text, /شارع الأمير محمد/);
     const r = roundTrip('Passport N1234567 expires March 2029. Ask Hassan.');
     assert.equal(r.text, 'Passport [PASSPORT_1] expires March 2029. Ask [PERSON_1].');
   });

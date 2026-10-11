@@ -102,11 +102,13 @@ What it does not do, stated plainly:
 - It can hide too much. A contact called Grace also hides "grace" in "the grace period", and a word wrongly taken for a name after a cue ("my boss Approved") is hidden everywhere in the vault after that. Over-hiding costs answer quality, not privacy.
 - A spelling that is not in its built-in list and that you have not taught it is a different name. A typo ("Mohamemd") is not recognised.
 - Built-in spellings are joined by name, not by person: two different people called Mohd and Mohammed with no family name share one placeholder.
-- It hides who, and some of the most personal what: where someone lives, a full date of birth, and a list of medical terms (tests: `test/kinds.test.ts`).
-  - Addresses: a Saudi National Address code, a numbered street ("221 Olaya Main Street"), and whatever follows "my address is", "lives at", a P.O. box or postal code, العنوان, ص.ب, الرمز البريدي. A landmark such as "King Fahd Road" is not an address and stays.
-  - Dates of birth: a full date with a year, written after "born", "date of birth", "DOB" or تاريخ الميلاد. A birthday with no year and an ordinary date stay readable, because reminders need them.
-  - Medical: about 35 English and 15 Arabic terms (diabetes, cancer, HIV, asthma, pregnancy, insulin, السكري, سرطان and so on). It is a list, so a condition or drug not on it is sent as written. It cannot judge context: "cancer" in a horoscope is hidden too.
-  - Everything else that describes a person ("the tall man from the bank"), places that are not an address, amounts and ordinary dates are sent.
+- It hides who, and some of the most personal what: where someone lives, where they are treated, a full date of birth, record numbers, and a list of medical terms (tests: `test/kinds.test.ts`).
+  - Addresses: a Saudi National Address code, a numbered street ("221 Olaya Main Street"), a plot, building, villa or flat number ("Plot 77", قطعة رقم 77), a postal code after a Saudi city ("Riyadh 13521"), and whatever follows "my address is", "lives at", a P.O. box or postal code, العنوان, ص.ب, الرمز البريدي. A landmark such as "King Fahd Road" is not an address and stays.
+  - Hospitals and clinics, as FACILITY: a name ending in Hospital, Medical City, Medical Center, Clinic or Polyclinic ("King Fahad Medical City"), and مستشفى, مستوصف, عيادة followed by its name. A hospital named after a king is hidden as a place, never as a person.
+  - Record numbers, as RECORD: a number of five digits or more after a label that says what it is: MRN, medical record or file number, patient number, insurance policy or member number, CR or commercial registration, VAT or tax number, account number, رقم الملف, السجل التجاري, الرقم الضريبي, رقم البوليصة. The model is told it is a record, not a phone.
+  - Dates of birth: a full date with a year, written after "born", "date of birth", "DOB" or تاريخ الميلاد, Gregorian or Hijri ("1388/06/15 هـ", "1405/03/22 AH"). A birthday with no year and an ordinary date stay readable, because reminders need them.
+  - Medical: about 85 English conditions, about 75 medicines whose name tells what someone has (metformin, empagliflozin, sertraline, warfarin and so on) and about 55 Arabic terms (السكري, ارتفاع ضغط الدم, فقر الدم, الأنسولين and so on). It is a list, so a condition or drug not on it is sent as written. It cannot judge context: "cancer" in a horoscope is hidden too. Words that are often not medical ("stroke", "aids") are left off on purpose.
+  - Everything else that describes a person ("the tall man from the bank"), places that are not an address or a hospital, amounts and ordinary dates are sent.
   - Not done: reading scanned PDFs and photos (OCR). Text in an image is neither read nor hidden.
 
 ## Memory
