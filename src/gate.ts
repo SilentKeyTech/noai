@@ -63,7 +63,29 @@ export interface Transport {
   (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }): Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 }
 
-export const httpTransport: Transport = (url, init) => fetch(url, init);
+/**
+ * A shared provider key (a hackathon or free-tier endpoint) answers 429 when the
+ * team's per-minute cap is hit. The redacted request has not been processed, so
+ * sending the same bytes again a moment later is safe and the receipt still
+ * describes exactly what left. Waits for Retry-After when given (capped), else
+ * 2, 5 and 10 seconds, and gives up early if the caller's deadline aborts.
+ */
+const RATE_LIMIT_WAITS_MS = [2000, 5000, 10000];
+export async function fetchWithBackoff(url: string, init: RequestInit & { signal?: AbortSignal }, waits = RATE_LIMIT_WAITS_MS): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch(url, init);
+    if (r.status !== 429 || attempt >= waits.length) return r;
+    const after = Number(r.headers.get('retry-after'));
+    const ms = Number.isFinite(after) && after > 0 ? Math.min(after * 1000, 20000) : waits[attempt]!;
+    await r.body?.cancel().catch(() => undefined);
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(resolve, ms);
+      init.signal?.addEventListener('abort', () => { clearTimeout(t); reject(init.signal?.reason ?? new Error('aborted')); }, { once: true });
+    });
+  }
+}
+
+export const httpTransport: Transport = (url, init) => fetchWithBackoff(url, init);
 
 export interface GateResult {
   answer: string;
@@ -305,7 +327,7 @@ export interface StreamTransport {
 }
 
 export const httpStreamTransport: StreamTransport = async (url, init) => {
-  const r = await fetch(url, init);
+  const r = await fetchWithBackoff(url, init);
   return { ok: r.ok, status: r.status, body: r.body as unknown as AsyncIterable<Uint8Array> | null, text: () => r.text() };
 };
 
