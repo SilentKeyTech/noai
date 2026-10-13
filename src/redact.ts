@@ -158,6 +158,7 @@ const MEDICAL_TERMS = [
   'heart failure', 'heart disease', 'heart attack', 'coronary artery disease', 'atrial fibrillation', 'angina',
   'hypothyroidism', 'hyperthyroidism', 'an(?:a)?emia', 'sickle cell(?:\\s+disease)?', 'thalass(?:a)?emia', 'obesity', 'osteoporosis',
   "Crohn'?s(?:\\s+disease)?", 'ulcerative colitis', 'celiac disease', 'coeliac disease', 'psoriasis', 'migraine', 'arthritis', 'gout',
+  'glaucoma', 'cataracts?', 'macular degeneration', 'keratoconus', 'pre-?eclampsia', 'gestational diabetes', 'endometriosis', 'PCOS', 'polycystic ovary syndrome',
   // medicines whose name tells what someone has
   'insulin', 'metformin', 'empagliflozin', 'dapagliflozin', 'sitagliptin', 'gliclazide', 'glimepiride', 'semaglutide', 'liraglutide', 'tirzepatide',
   'Ozempic', 'Mounjaro', 'Jardiance', 'Januvia',
@@ -167,6 +168,13 @@ const MEDICAL_TERMS = [
   'bupropion', 'mirtazapine', 'quetiapine', 'olanzapine', 'risperidone', 'aripiprazole', 'lithium', 'valproate', 'lamotrigine', 'levetiracetam',
   'carbamazepine', 'methylphenidate', 'Ritalin', 'Concerta', 'diazepam', 'alprazolam', 'Xanax', 'lorazepam', 'clonazepam', 'tramadol',
   'morphine', 'oxycodone', 'methadone', 'buprenorphine', 'naltrexone', 'sildenafil', 'Viagra', 'tadalafil', 'antiretrovirals?',
+  // heart and blood pressure, including the ones used in pregnancy
+  'labetalol', 'methyldopa', 'propranolol', 'atenolol', 'carvedilol', 'nebivolol', 'ramipril', 'enalapril', 'perindopril', 'candesartan', 'irbesartan',
+  'telmisartan', 'nifedipine', 'diltiazem', 'verapamil', 'hydrochlorothiazide', 'indapamide', 'spironolactone', 'digoxin', 'amiodarone', 'dabigatran', 'edoxaban',
+  // eye drops for glaucoma
+  'latanoprost', 'bimatoprost', 'travoprost', 'timolol', 'brimonidine', 'dorzolamide', 'brinzolamide', 'acetazolamide',
+  // nerves, memory, joints
+  'gabapentin', 'pregabalin', 'topiramate', 'phenytoin', 'donepezil', 'memantine', 'levodopa', 'hydroxychloroquine', 'allopurinol', 'colchicine',
   'antidepressants?', 'antipsychotics?',
 ].join('|');
 const MEDICAL_ARABIC = [
@@ -176,6 +184,7 @@ const MEDICAL_ARABIC = [
   'الزهايمر', 'زهايمر', 'باركنسون', 'خرف', 'التصلب المتعدد', 'الذئبة', 'فقر الدم', 'أنيميا', 'انيميا', 'الأنيميا المنجلية', 'ثلاسيميا',
   'قصور الغدة الدرقية', 'فرط نشاط الغدة الدرقية', 'سمنة', 'هشاشة العظام', 'صدفية', 'إدمان', 'ادمان', 'انتحار',
   'أنسولين', 'انسولين', 'إنسولين', 'ميتفورمين',
+  'جلوكوما', 'غلوكوما', 'المياه الزرقاء', 'الماء الأزرق', 'المياه البيضاء', 'الساد', 'تسمم الحمل', 'سكري الحمل',
 ].join('|');
 const MEDICAL = new RegExp(String.raw`(?<![\p{L}])(?:${MEDICAL_TERMS})(?![\p{L}])|(?<![\p{L}])(?:[والفب]?(?:ال)?)(?:${MEDICAL_ARABIC})(?![\p{L}])`, 'giu');
 

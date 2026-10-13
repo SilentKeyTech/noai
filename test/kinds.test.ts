@@ -101,6 +101,14 @@ describe('Saudi files, found sent as written in a test on 9 Oct 2026', () => {
     hides('type 2 diabetes mellitus with diabetic nephropathy, on empagliflozin and atorvastatin', ['type 2 diabetes mellitus', 'nephropathy', 'empagliflozin', 'atorvastatin'], 'MEDICAL');
     hides('لديه ارتفاع ضغط الدم وفقر الدم ويأخذ الأنسولين', ['ارتفاع ضغط الدم', 'فقر الدم', 'الأنسولين'], 'MEDICAL');
   });
+  it('hides eye conditions, pregnancy conditions and heart and eye-drop medicines', () => {
+    hides('Known cataract and pre-eclampsia, started on carvedilol and timolol drops.', ['cataract', 'pre-eclampsia', 'carvedilol', 'timolol'], 'MEDICAL');
+    hides('تعاني من المياه الزرقاء وسكري الحمل', ['المياه الزرقاء', 'سكري الحمل'], 'MEDICAL');
+  });
+  it('does not mistake ordinary Arabic words for the cataract term', () => {
+    const r = redact('الفصل السادس من العقد');
+    assert.equal(r.counts.MEDICAL, undefined, r.text);
+  });
   it('hides a plot or villa number and a postal code after the city', () => {
     hides('Site: Plot 77, King Abdullah Financial District, Riyadh 13521', ['Plot 77', '13521'], 'ADDRESS');
     hides('القطعة رقم 77 في حي الملقا', ['77'], 'ADDRESS');
