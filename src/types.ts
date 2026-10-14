@@ -102,6 +102,8 @@ export interface DisclosureReceipt {
   outcome?: 'timeout' | 'error';
   /** set by the company gateway: which staff member's token made the call, never the token itself */
   client?: string;
+  /** set by the company gateway when its main upstream failed and this receipt is the fallback's answer */
+  fellBack?: true;
 }
 
 export interface SignedDisclosure {

@@ -120,7 +120,7 @@ async function send(text) {
   if (receipt) {
     const n = el('div', 'note');
     const kinds = Object.entries(receipt.redactions || {});
-    n.append(document.createTextNode('Receipt #' + receipt.seq + ' · hidden before sending: '));
+    n.append(document.createTextNode('Receipt #' + receipt.seq + (receipt.fellBack ? ' · answered by the fallback, ' + receipt.model : '') + ' · hidden before sending: '));
     if (!kinds.length) n.append(document.createTextNode('nothing needed hiding'));
     for (const [k, v] of kinds) n.append(el('span', 'gw-chip', k + ' ×' + v));
     out.m.append(n);
