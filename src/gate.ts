@@ -138,10 +138,34 @@ export interface GatewayConfig {
    * Bedrock key. apiKey then only says that a source is set.
    */
   keySource?: () => Promise<string>;
+  /**
+   * A second upstream, tried once with the same redacted messages when the main
+   * one fails, stalls or answers with garbage, and only while nothing has been
+   * passed on to the client. Unset, the gateway behaves as it always did.
+   */
+  fallback?: GatewayUpstream;
+  /**
+   * With a fallback set: how long the main upstream has before the fallback is
+   * tried, in ms. Streaming, until its first word; otherwise, its whole answer.
+   */
+  fallbackAfterMs?: number;
 }
+
+/** One OpenAI-compatible place the gateway can forward to. */
+export interface GatewayUpstream {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  keySource?: () => Promise<string>;
+}
+
+export const DEFAULT_FALLBACK_AFTER_MS = 20_000;
 
 export function gatewayConfigFromEnv(root: string): GatewayConfig {
   const base = configFromEnv(root);
+  const region = process.env.AWS_REGION ?? 'eu-north-1';
+  const fbUrl = process.env.NOAI_GATEWAY_FALLBACK_UPSTREAM;
+  const fbKey = process.env.NOAI_GATEWAY_FALLBACK_KEY;
   return {
     root,
     baseUrl: process.env.NOAI_GATEWAY_UPSTREAM ?? base.baseUrl,
@@ -149,8 +173,41 @@ export function gatewayConfigFromEnv(root: string): GatewayConfig {
     model: base.model,
     maxPayloadBytes: Number(process.env.NOAI_GATEWAY_MAX_PAYLOAD ?? 200_000),
     timeoutMs: Number(process.env.NOAI_GATEWAY_TIMEOUT_MS ?? 120_000),
-    ...(process.env.NOAI_GATEWAY_KEY === 'aws-role' ? { keySource: awsRoleKeySource(process.env.AWS_REGION ?? 'eu-north-1') } : {}),
+    ...(process.env.NOAI_GATEWAY_KEY === 'aws-role' ? { keySource: awsRoleKeySource(region) } : {}),
+    ...(fbUrl && fbKey
+      ? {
+          fallback: {
+            baseUrl: fbUrl,
+            apiKey: fbKey,
+            model: process.env.NOAI_GATEWAY_FALLBACK_MODEL || base.model,
+            ...(fbKey === 'aws-role' ? { keySource: awsRoleKeySource(region) } : {}),
+          },
+          fallbackAfterMs: Number(process.env.NOAI_GATEWAY_FALLBACK_AFTER_MS ?? DEFAULT_FALLBACK_AFTER_MS),
+        }
+      : {}),
   };
+}
+
+/**
+ * A reply that is clearly not text: in its first 200 characters, one symbol
+ * (not a letter or digit) makes up 80% or more of what is not white space, or
+ * the whole of it is one short piece repeated, like "own own own". Deliberately
+ * cautious: it judges only replies with at least 32 visible characters, so a
+ * short real answer is never thrown away.
+ */
+export function looksDegenerate(text: string): boolean {
+  const s = text.slice(0, 200).replace(/\s+/g, '');
+  if (s.length < 32) return false;
+  const counts = new Map<string, number>();
+  for (const ch of s) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  const chars = [...s].length;
+  for (const [ch, n] of counts) if (!/[\p{L}\p{N}]/u.test(ch) && n / chars >= 0.8) return true;
+  for (let p = 1; p <= 12; p++) {
+    let periodic = true;
+    for (let i = p; i < s.length && periodic; i++) if (s[i] !== s[i - p]) periodic = false;
+    if (periodic) return true;
+  }
+  return false;
 }
 
 /** A request the gateway will not forward, with the HTTP status to answer with. Nothing was sent. */
@@ -172,11 +229,14 @@ const GATEWAY_REFUSED = ['tools', 'tool_choice', 'functions', 'function_call'] a
 export interface GatewayResult {
   /** the provider's reply with placeholders put back, ready to return to the client */
   response: Record<string, unknown>;
-  /** the exact redacted body that left the machine */
+  /** the exact redacted body that left the machine for the upstream that answered */
   disclosed: string;
   signed: SignedDisclosure;
   entry: LedgerEntry;
+  /** the model that answered, which is the fallback's if the main upstream did not */
   model: string;
+  /** true when the main upstream failed and the fallback answered */
+  fellBack: boolean;
   ms: number;
 }
 
@@ -229,6 +289,102 @@ function gatewayBody(req: Record<string, unknown>, cfg: GatewayConfig, known: Re
   return { body, model, counts: red.counts, map: red.map };
 }
 
+/** 2. budget, checked before any byte leaves */
+function checkBudget(body: string, cfg: GatewayConfig): number {
+  const payloadBytes = Buffer.byteLength(body, 'utf8');
+  if (payloadBytes > cfg.maxPayloadBytes) {
+    throw new GatewayError(`Refused: ${String(payloadBytes)} bytes exceeds the ${String(cfg.maxPayloadBytes)} byte ceiling. Nothing was sent.`, 413);
+  }
+  return payloadBytes;
+}
+
+/** The same redacted body with only the model name changed, for the fallback. */
+const withModel = (body: string, model: string): string => JSON.stringify({ ...(JSON.parse(body) as Record<string, unknown>), model });
+
+const chatUrl = (baseUrl: string): string => `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+
+/** 5. receipt, signed and chained, for every attempt that sent bytes */
+function gatewayReceipt(
+  v: OpenVault,
+  root: string,
+  a: { url: string; model: string; body: string; counts: Record<string, number>; client: string; fellBack: boolean },
+  text: string,
+  usage: DisclosureReceipt['usage'],
+  outcome?: 'timeout' | 'error',
+): Promise<{ signed: SignedDisclosure; entry: LedgerEntry }> {
+  return gatewaySerial(async () => {
+    const receipt: DisclosureReceipt = {
+      version: 1,
+      kind: 'noai.disclosure',
+      statement: 'This device sent exactly the payload whose hash is below, and nothing else, to the named model.',
+      receiptId: newId(),
+      at: new Date().toISOString(),
+      endpoint: new URL(a.url).host,
+      model: a.model,
+      payloadHash: sha256(a.body),
+      payloadBytes: Buffer.byteLength(a.body, 'utf8'),
+      sources: [],
+      redactions: a.counts,
+      responseHash: sha256(text),
+      usage,
+      signer: v.data.device.publicKey,
+      client: a.client,
+      ...(outcome ? { outcome } : {}),
+      ...(a.fellBack ? { fellBack: true as const } : {}),
+    };
+    const pk = unwrapPrivateKey(v);
+    const signed = signDisclosure(receipt, pk);
+    scrub(pk);
+    const entry = await append(root, signed);
+    await storeDisclosure(v, receipt.receiptId, a.body);
+    return { signed, entry };
+  });
+}
+
+/**
+ * An upstream call that did not give a usable answer. `canFallBack` says
+ * whether trying the fallback is safe and worth it: nothing has reached the
+ * client yet, and the failure was not the request's own fault.
+ */
+class UpstreamFailed extends GatewayError {
+  readonly canFallBack: boolean;
+  constructor(message: string, status: number, canFallBack: boolean) {
+    super(message, status);
+    this.canFallBack = canFallBack;
+  }
+}
+
+/** A refusal that says the request itself is wrong fails on any upstream, so it is not retried elsewhere. */
+const REQUEST_FAULTS = new Set([400, 413, 422]);
+
+async function upstreamKey(up: GatewayUpstream, model: string): Promise<string> {
+  if (!up.keySource) return up.apiKey;
+  try {
+    return await up.keySource();
+  } catch (e) {
+    throw new UpstreamFailed(`No key for ${model}: ${e instanceof Error ? e.message : String(e)}`, e instanceof GatewayError ? e.status : 503, true);
+  }
+}
+
+/** Try the main upstream, then, if it failed in a way the fallback can cure, the fallback once. */
+async function withFallback<T>(cfg: GatewayConfig, main: (canFallBack: boolean) => Promise<T>, backup: (fb: GatewayUpstream) => Promise<T>): Promise<T> {
+  const fb = cfg.fallback;
+  try {
+    return await main(!!fb);
+  } catch (e) {
+    if (!fb || !(e instanceof UpstreamFailed) || !e.canFallBack) throw e;
+    try {
+      return await backup(fb);
+    } catch (e2) {
+      if (!(e2 instanceof GatewayError)) throw e2;
+      throw new GatewayError(`${e.message} The fallback was tried and also failed: ${e2.message}`, e2.status);
+    }
+  }
+}
+
+const primaryOf = (cfg: GatewayConfig, model: string): GatewayUpstream => ({ baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model, ...(cfg.keySource ? { keySource: cfg.keySource } : {}) });
+const fallbackAfter = (cfg: GatewayConfig): number => cfg.fallbackAfterMs ?? DEFAULT_FALLBACK_AFTER_MS;
+
 /**
  * Forward one chat completion. `client` is the staff member the token belongs
  * to; it goes on the receipt so the log says who, never the token.
@@ -245,80 +401,71 @@ export async function forwardChat(
   const started = Date.now();
   if (!cfg.apiKey) throw new GatewayError('The gateway has no upstream key (NOAI_GATEWAY_KEY or NEBIUS_API_KEY). Nothing was sent.', 503);
   const { body, model, counts, map } = gatewayBody(req, cfg, known);
-  // 2. budget, checked before any byte leaves
-  const payloadBytes = Buffer.byteLength(body, 'utf8');
-  if (payloadBytes > cfg.maxPayloadBytes) {
-    throw new GatewayError(`Refused: ${String(payloadBytes)} bytes exceeds the ${String(cfg.maxPayloadBytes)} byte ceiling. Nothing was sent.`, 413);
-  }
-  const url = `${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`;
+  checkBudget(body, cfg);
 
-  // 5. receipt, signed and chained, for every attempt that sent bytes
-  const receiptFor = (text: string, usage: DisclosureReceipt['usage'], outcome?: 'timeout' | 'error') =>
-    gatewaySerial(async () => {
-      const receipt: DisclosureReceipt = {
-        version: 1,
-        kind: 'noai.disclosure',
-        statement: 'This device sent exactly the payload whose hash is below, and nothing else, to the named model.',
-        receiptId: newId(),
-        at: new Date().toISOString(),
-        endpoint: new URL(url).host,
-        model,
-        payloadHash: sha256(body),
-        payloadBytes,
-        sources: [],
-        redactions: counts,
-        responseHash: sha256(text),
-        usage,
-        signer: v.data.device.publicKey,
-        client,
-        ...(outcome ? { outcome } : {}),
-      };
-      const pk = unwrapPrivateKey(v);
-      const signed = signDisclosure(receipt, pk);
-      scrub(pk);
-      const entry = await append(cfg.root, signed);
-      await storeDisclosure(v, receipt.receiptId, body);
-      return { signed, entry };
-    });
+  const attempt = async (up: GatewayUpstream, body: string, deadlineMs: number, fellBack: boolean, canFallBack: boolean): Promise<GatewayResult> => {
+    const model = up.model;
+    const url = chatUrl(up.baseUrl);
+    const receiptFor = (text: string, usage: DisclosureReceipt['usage'], outcome?: 'timeout' | 'error') => gatewayReceipt(v, cfg.root, { url, model, body, counts, client, fellBack }, text, usage, outcome);
+    const key = await upstreamKey(up, model);
 
-  // 3. the hash above is of these exact bytes. 4. send
-  const controller = new AbortController();
-  const timer = cfg.timeoutMs ? setTimeout(() => controller.abort(), cfg.timeoutMs) : null;
-  let res: Awaited<ReturnType<Transport>>;
-  let text: string;
-  try {
-    res = await transport(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.keySource ? await cfg.keySource() : cfg.apiKey}` }, body, signal: controller.signal });
-    text = await res.text();
-  } catch (e) {
-    const timedOut = controller.signal.aborted;
-    await receiptFor('', null, timedOut ? 'timeout' : 'error');
-    throw new GatewayError(timedOut ? `${model} did not answer within ${String(cfg.timeoutMs)} ms.` : `${model} could not be reached: ${e instanceof Error ? e.message : String(e)}`, timedOut ? 504 : 502);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-  if (!res.ok) {
-    await receiptFor(text, null, 'error');
-    throw new GatewayError(`The provider returned ${String(res.status)}: ${text.slice(0, 300)}`, 502);
-  }
-  let json: Record<string, unknown>;
-  try {
-    json = JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    await receiptFor(text, null, 'error');
-    throw new GatewayError('The provider returned something that is not JSON.', 502);
-  }
-  const u = json.usage as { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
-  const { signed, entry } = await receiptFor(text, u ? { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0 } : null);
-
-  // 6. rehydrate on this machine
-  for (const c of (Array.isArray(json.choices) ? json.choices : []) as { message?: Record<string, unknown> }[]) {
-    for (const k of ['content', 'reasoning_content']) {
-      const val = c.message?.[k];
-      if (c.message && typeof val === 'string') c.message[k] = rehydrate(k === 'content' ? dropThinking(val) : val, map);
+    // 3. the hash on the receipt is of these exact bytes. 4. send
+    const controller = new AbortController();
+    const timer = deadlineMs ? setTimeout(() => controller.abort(), deadlineMs) : null;
+    let res: Awaited<ReturnType<Transport>>;
+    let text: string;
+    try {
+      res = await transport(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` }, body, signal: controller.signal });
+      text = await res.text();
+    } catch (e) {
+      const timedOut = controller.signal.aborted;
+      await receiptFor('', null, timedOut ? 'timeout' : 'error');
+      throw new UpstreamFailed(timedOut ? `${model} did not answer within ${String(deadlineMs)} ms.` : `${model} could not be reached: ${e instanceof Error ? e.message : String(e)}`, timedOut ? 504 : 502, canFallBack);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-  }
-  json.noai = { receiptId: signed.receipt.receiptId, seq: entry.seq, payloadHash: signed.receipt.payloadHash, redactions: counts };
-  return { response: json, disclosed: body, signed, entry, model, ms: Date.now() - started };
+    if (!res.ok) {
+      await receiptFor(text, null, 'error');
+      throw new UpstreamFailed(`The provider returned ${String(res.status)}: ${text.slice(0, 300)}`, 502, canFallBack && !REQUEST_FAULTS.has(res.status));
+    }
+    let json: Record<string, unknown>;
+    try {
+      json = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      await receiptFor(text, null, 'error');
+      throw new UpstreamFailed('The provider returned something that is not JSON.', 502, canFallBack);
+    }
+    const u = json.usage as { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
+    const usage = u ? { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0 } : null;
+    const choices = (Array.isArray(json.choices) ? json.choices : []) as { message?: Record<string, unknown> }[];
+    const first = choices[0]?.message?.content;
+    // Garbage is only worth catching when there is somewhere else to ask.
+    if (canFallBack && typeof first === 'string' && looksDegenerate(first)) {
+      await receiptFor(text, usage, 'error');
+      throw new UpstreamFailed(`${model} answered with repeated characters, not text.`, 502, true);
+    }
+    const { signed, entry } = await receiptFor(text, usage);
+
+    // 6. rehydrate on this machine
+    for (const c of choices) {
+      for (const k of ['content', 'reasoning_content']) {
+        const val = c.message?.[k];
+        if (c.message && typeof val === 'string') c.message[k] = rehydrate(k === 'content' ? dropThinking(val) : val, map);
+      }
+    }
+    json.noai = { receiptId: signed.receipt.receiptId, seq: entry.seq, payloadHash: signed.receipt.payloadHash, redactions: counts, model, ...(fellBack ? { fellBack: true } : {}) };
+    return { response: json, disclosed: body, signed, entry, model, fellBack, ms: Date.now() - started };
+  };
+
+  return withFallback(
+    cfg,
+    (canFallBack) => attempt(primaryOf(cfg, model), body, canFallBack ? Math.min(cfg.timeoutMs || Infinity, fallbackAfter(cfg)) : cfg.timeoutMs, false, canFallBack),
+    (fb) => {
+      const fbBody = withModel(body, fb.model);
+      checkBudget(fbBody, cfg);
+      return attempt(fb, fbBody, cfg.timeoutMs, true, false);
+    },
+  );
 }
 
 /** What a streaming call needs from the network: the body as it arrives, in pieces. */
@@ -334,12 +481,18 @@ export const httpStreamTransport: StreamTransport = async (url, init) => {
 export interface GatewayStreamResult {
   signed: SignedDisclosure;
   entry: LedgerEntry;
+  /** the model that answered, which is the fallback's if the main upstream did not */
   model: string;
+  /** true when the main upstream failed and the fallback answered */
+  fellBack: boolean;
   ms: number;
   finishReason: string | null;
   /** how many values of each kind were hidden, never the values */
   redactions: Record<string, number>;
 }
+
+/** How much of a reply is held back and checked for garbage before any of it is passed on, when a fallback is set. */
+const STREAM_CHECK_CHARS = 200;
 
 /**
  * Forward one chat completion and hand the reply on piece by piece, with the
@@ -348,117 +501,161 @@ export interface GatewayStreamResult {
  * fails before the first piece throws a GatewayError like forwardChat; one that
  * fails part way is receipted as an error and then throws, so the caller can
  * end its own stream with an error.
+ *
+ * With a fallback set, the main upstream must send its first word within
+ * fallbackAfterMs, and its first 200 characters are held back until they are
+ * known not to be garbage. Until a piece has been passed on, any failure moves
+ * the same redacted messages to the fallback. After that, never: a client is
+ * not shown half of one answer and the rest of another.
  */
 export async function forwardChatStream(
   v: OpenVault,
   cfg: GatewayConfig,
   req: Record<string, unknown>,
   client: string,
-  onPiece: (text: string) => void,
+  /** each piece of the reply, and the model that is writing it */
+  onPiece: (text: string, model: string) => void,
   transport: StreamTransport = httpStreamTransport,
   known: RedactOptions = {},
 ): Promise<GatewayStreamResult> {
   const started = Date.now();
   if (!cfg.apiKey) throw new GatewayError('The gateway has no upstream key (NOAI_GATEWAY_KEY or NEBIUS_API_KEY). Nothing was sent.', 503);
   const { body, model, counts, map } = gatewayBody(req, cfg, known, true);
-  const payloadBytes = Buffer.byteLength(body, 'utf8');
-  if (payloadBytes > cfg.maxPayloadBytes) {
-    throw new GatewayError(`Refused: ${String(payloadBytes)} bytes exceeds the ${String(cfg.maxPayloadBytes)} byte ceiling. Nothing was sent.`, 413);
-  }
-  const url = `${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`;
+  checkBudget(body, cfg);
 
-  const receiptFor = (raw: string, outcome?: 'timeout' | 'error') =>
-    gatewaySerial(async () => {
-      const receipt: DisclosureReceipt = {
-        version: 1,
-        kind: 'noai.disclosure',
-        statement: 'This device sent exactly the payload whose hash is below, and nothing else, to the named model.',
-        receiptId: newId(),
-        at: new Date().toISOString(),
-        endpoint: new URL(url).host,
-        model,
-        payloadHash: sha256(body),
-        payloadBytes,
-        sources: [],
-        redactions: counts,
-        responseHash: sha256(raw),
-        usage: null,
-        signer: v.data.device.publicKey,
-        client,
-        ...(outcome ? { outcome } : {}),
-      };
-      const pk = unwrapPrivateKey(v);
-      const signed = signDisclosure(receipt, pk);
-      scrub(pk);
-      const entry = await append(cfg.root, signed);
-      await storeDisclosure(v, receipt.receiptId, body);
-      return { signed, entry };
-    });
+  const attempt = async (up: GatewayUpstream, body: string, fellBack: boolean, canFallBack: boolean): Promise<GatewayStreamResult> => {
+    const model = up.model;
+    const url = chatUrl(up.baseUrl);
+    const receiptFor = (raw: string, outcome?: 'timeout' | 'error') => gatewayReceipt(v, cfg.root, { url, model, body, counts, client, fellBack }, raw, null, outcome);
+    const key = await upstreamKey(up, model);
+    const firstMs = canFallBack ? fallbackAfter(cfg) : 0;
 
-  const controller = new AbortController();
-  const timer = cfg.timeoutMs ? setTimeout(() => controller.abort(), cfg.timeoutMs) : null;
-  const rehydrator = new StreamRehydrator(map);
-  const thinking = new ThinkingFilter();
-  let raw = '';
-  let finishReason: string | null = null;
-  try {
-    let res: Awaited<ReturnType<StreamTransport>>;
-    try {
-      res = await transport(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.keySource ? await cfg.keySource() : cfg.apiKey}` }, body, signal: controller.signal });
-    } catch (e) {
-      const timedOut = controller.signal.aborted;
-      await receiptFor('', timedOut ? 'timeout' : 'error');
-      throw new GatewayError(timedOut ? `${model} did not answer within ${String(cfg.timeoutMs)} ms.` : `${model} could not be reached: ${e instanceof Error ? e.message : String(e)}`, timedOut ? 504 : 502);
-    }
-    if (!res.ok || !res.body) {
-      const text = await res.text().catch(() => '');
-      await receiptFor(text, 'error');
-      throw new GatewayError(`The provider returned ${String(res.status)}: ${text.slice(0, 300)}`, 502);
-    }
-
-    const decoder = new TextDecoder();
-    let pending = '';
-    const line = (l: string): void => {
-      if (!l.startsWith('data:')) return;
-      const data = l.slice(5).trim();
-      if (!data || data === '[DONE]') return;
-      let j: { choices?: { delta?: { content?: unknown; reasoning_content?: unknown }; finish_reason?: string | null }[] };
-      try {
-        j = JSON.parse(data) as typeof j;
-      } catch {
+    const controller = new AbortController();
+    const timer = cfg.timeoutMs ? setTimeout(() => controller.abort(), cfg.timeoutMs) : null;
+    let firstLate = false;
+    let firstTimer = firstMs
+      ? setTimeout(() => {
+          firstLate = true;
+          controller.abort();
+        }, firstMs)
+      : null;
+    const rehydrator = new StreamRehydrator(map);
+    const thinking = new ThinkingFilter();
+    let raw = '';
+    let finishReason: string | null = null;
+    // Nothing is passed on until the start of the reply is known to be text, when there is a fallback to turn to.
+    let checked = !canFallBack;
+    let held = '';
+    let forwarded = false;
+    let degenerate = false;
+    const emit = (out: string): void => {
+      if (!out) return;
+      if (!checked) {
+        held += out;
         return;
       }
-      const c = j.choices?.[0];
-      if (c?.finish_reason) finishReason = c.finish_reason;
-      const piece = typeof c?.delta?.content === 'string' ? c.delta.content : '';
-      if (!piece) return;
-      raw += piece;
-      const out = rehydrator.push(thinking.push(piece));
-      if (out) onPiece(out);
+      forwarded = true;
+      onPiece(out, model);
+    };
+    const check = (): void => {
+      if (checked) return;
+      if (looksDegenerate(raw)) {
+        degenerate = true;
+        return;
+      }
+      checked = true;
+      const out = held;
+      held = '';
+      emit(out);
     };
     try {
-      for await (const chunk of res.body) {
-        pending += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
-        let nl = pending.indexOf('\n');
-        while (nl >= 0) {
-          line(pending.slice(0, nl).replace(/\r$/, ''));
-          pending = pending.slice(nl + 1);
-          nl = pending.indexOf('\n');
-        }
+      let res: Awaited<ReturnType<StreamTransport>>;
+      try {
+        res = await transport(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` }, body, signal: controller.signal });
+      } catch (e) {
+        const timedOut = controller.signal.aborted;
+        await receiptFor('', timedOut ? 'timeout' : 'error');
+        const waited = firstLate ? firstMs : cfg.timeoutMs;
+        throw new UpstreamFailed(timedOut ? `${model} did not answer within ${String(waited)} ms.` : `${model} could not be reached: ${e instanceof Error ? e.message : String(e)}`, timedOut ? 504 : 502, canFallBack);
       }
-      line(pending.trim());
-      const rest = rehydrator.push(thinking.flush()) + rehydrator.flush();
-      if (rest) onPiece(rest);
-    } catch (e) {
-      const timedOut = controller.signal.aborted;
-      await receiptFor(raw, timedOut ? 'timeout' : 'error');
-      throw new GatewayError(timedOut ? `${model} stopped answering within ${String(cfg.timeoutMs)} ms.` : `The reply from ${model} broke off: ${e instanceof Error ? e.message : String(e)}`, timedOut ? 504 : 502);
+      if (!res.ok || !res.body) {
+        const text = await res.text().catch(() => '');
+        await receiptFor(text, 'error');
+        throw new UpstreamFailed(`The provider returned ${String(res.status)}: ${text.slice(0, 300)}`, 502, canFallBack && !REQUEST_FAULTS.has(res.status));
+      }
+
+      const decoder = new TextDecoder();
+      let pending = '';
+      const line = (l: string): void => {
+        if (!l.startsWith('data:')) return;
+        const data = l.slice(5).trim();
+        if (!data || data === '[DONE]') return;
+        let j: { choices?: { delta?: { content?: unknown; reasoning_content?: unknown }; finish_reason?: string | null }[] };
+        try {
+          j = JSON.parse(data) as typeof j;
+        } catch {
+          return;
+        }
+        const c = j.choices?.[0];
+        if (c?.finish_reason) finishReason = c.finish_reason;
+        const piece = typeof c?.delta?.content === 'string' ? c.delta.content : '';
+        if (!piece) return;
+        if (firstTimer) {
+          clearTimeout(firstTimer);
+          firstTimer = null;
+        }
+        raw += piece;
+        emit(rehydrator.push(thinking.push(piece)));
+        if (!checked && raw.length >= STREAM_CHECK_CHARS) check();
+      };
+      try {
+        for await (const chunk of res.body) {
+          pending += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+          let nl = pending.indexOf('\n');
+          while (nl >= 0 && !degenerate) {
+            line(pending.slice(0, nl).replace(/\r$/, ''));
+            pending = pending.slice(nl + 1);
+            nl = pending.indexOf('\n');
+          }
+          if (degenerate) break;
+        }
+        if (!degenerate) {
+          line(pending.trim());
+          check();
+        }
+        if (!degenerate) emit(rehydrator.push(thinking.flush()) + rehydrator.flush());
+      } catch (e) {
+        const timedOut = controller.signal.aborted;
+        await receiptFor(raw, timedOut ? 'timeout' : 'error');
+        const msg = timedOut
+          ? firstLate
+            ? `${model} sent no words within ${String(firstMs)} ms.`
+            : `${model} stopped answering within ${String(cfg.timeoutMs)} ms.`
+          : `The reply from ${model} broke off: ${e instanceof Error ? e.message : String(e)}`;
+        throw new UpstreamFailed(msg, timedOut ? 504 : 502, canFallBack && !forwarded);
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (firstTimer) clearTimeout(firstTimer);
     }
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-  const { signed, entry } = await receiptFor(raw);
-  return { signed, entry, model, ms: Date.now() - started, finishReason, redactions: counts };
+    if (degenerate) {
+      controller.abort();
+      await receiptFor(raw, 'error');
+      throw new UpstreamFailed(`${model} answered with repeated characters, not text.`, 502, true);
+    }
+    const { signed, entry } = await receiptFor(raw);
+    return { signed, entry, model, fellBack, ms: Date.now() - started, finishReason, redactions: counts };
+  };
+
+  return withFallback(
+    cfg,
+    (canFallBack) => attempt(primaryOf(cfg, model), body, false, canFallBack),
+    (fb) => {
+      const fbBody = withModel(body, fb.model);
+      checkBudget(fbBody, cfg);
+      return attempt(fb, fbBody, true, false);
+    },
+  );
 }
 
 export async function disclose(

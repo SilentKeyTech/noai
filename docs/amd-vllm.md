@@ -27,6 +27,19 @@ Run the gateway on the same Droplet as vLLM, or on a separate machine. If they s
    Or build the image: `docker build -t noai-gateway .` and pass the same values with `-e`, with a volume on `/data`.
 5. Open `/chat`, send a message with a fake name and phone number, then open `/admin` and check the receipt shows what was hidden.
 
+## When the AMD upstream is unreliable
+
+On 14 Oct 2026 AMD Token Factory became unreliable overnight: Gemma returned runs of "/" and DeepSeek calls took up to 60 seconds, so CloudFront (60 second origin timeout) answered 504. A second upstream keeps the demo answering:
+
+```
+NOAI_GATEWAY_FALLBACK_UPSTREAM=<a second OpenAI-compatible base URL, for example Amazon Bedrock's>
+NOAI_GATEWAY_FALLBACK_KEY=aws-role
+NOAI_GATEWAY_FALLBACK_MODEL=<the model that upstream serves>
+NOAI_GATEWAY_FALLBACK_AFTER_MS=20000
+```
+
+The AMD upstream is still tried first. If it fails, sends no word within 20 seconds, or answers with garbage before anything has reached the person, the same redacted messages go to the fallback. The receipt, the last stream event and the receipts page name the model that actually answered and mark it as a fallback, so a demo never claims an AMD answer that came from somewhere else. CloudFront sees nothing until the first word is ready (or, without streaming, the whole answer), so 20 seconds plus the fallback's reply has to fit inside its 60 seconds; lower the 20 if the fallback is slow.
+
 ## Do not claim
 
 Anonymous, unique, or compliant. The gateway hides the kinds of detail it can recognise; it cannot promise it caught everything.

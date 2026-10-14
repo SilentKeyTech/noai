@@ -65,6 +65,7 @@ const api = async (method, path, body) => {
 const row = (...cells) => { const tr = document.createElement('tr'); for (const c of cells) { const td = document.createElement('td'); td.append(c instanceof Node ? c : document.createTextNode(String(c))); tr.append(td); } return tr; };
 const chips = (o) => { const s = document.createElement('span'); const k = Object.entries(o || {}); if (!k.length) s.append(el('span', 'nothing', 'dim')); for (const [kind, n] of k) s.append(el('span', `${kind} ×${n}`, 'gw-chip')); return s; };
 
+const modelCell = (e) => { const s = el('span', e.model); if (e.fellBack) { s.append(' '); s.append(el('span', 'fallback', 'gw-chip')); } return s; };
 async function load() {
   const s = await api('GET', '/admin/api/summary');
   $('login').classList.add('hidden'); $('app').classList.remove('hidden'); $('who').classList.remove('hidden');
@@ -84,7 +85,7 @@ async function load() {
       try { const r = await api('GET', '/admin/api/receipts/' + encodeURIComponent(e.receiptId) + '/body'); let t = r.body; try { t = JSON.stringify(JSON.parse(r.body), null, 2); } catch {} detail.textContent = t; } catch (x) { detail.textContent = x.message; }
       detail.classList.remove('hidden');
     };
-    const main = row(e.seq, e.at.replace('T', ' ').slice(0, 19), e.client || '-', e.model, e.bytes, e.outcome ? el('span', e.outcome, 'bad') : chips(e.redactions), b);
+    const main = row(e.seq, e.at.replace('T', ' ').slice(0, 19), e.client || '-', modelCell(e), e.bytes, e.outcome ? el('span', e.outcome, 'bad') : chips(e.redactions), b);
     const more = document.createElement('tr'); const td = document.createElement('td'); td.colSpan = 7; td.append(detail); more.append(td);
     return [main, more];
   }));

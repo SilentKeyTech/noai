@@ -170,7 +170,7 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
         staff: (await readStaff(root)).map((s) => ({ name: s.name, role: s.role, createdAt: s.createdAt, revokedAt: s.revokedAt ?? null })),
         entries: entries.slice(-200).reverse().map((e) => {
           const r = byId.get(e.receiptId);
-          return { seq: e.seq, receiptId: e.receiptId, at: e.at, model: e.model, bytes: e.payloadBytes, hash: e.payloadHash, client: r?.client ?? null, endpoint: r?.endpoint ?? null, redactions: r?.redactions ?? {}, outcome: r?.outcome ?? null };
+          return { seq: e.seq, receiptId: e.receiptId, at: e.at, model: e.model, bytes: e.payloadBytes, hash: e.payloadHash, client: r?.client ?? null, endpoint: r?.endpoint ?? null, redactions: r?.redactions ?? {}, outcome: r?.outcome ?? null, fellBack: r?.fellBack === true };
         }),
       });
     }
@@ -246,13 +246,15 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
         res.write(event({ role: 'assistant', content: '' }));
       };
       try {
-        const r = await forwardChatStream(opts.vault, opts.cfg, request, client, (text) => {
+        const r = await forwardChatStream(opts.vault, opts.cfg, request, client, (text, answering) => {
+          // The model that is actually writing, which is the fallback's if the main upstream failed first.
+          model = answering;
           begin();
           res.write(event({ content: text }));
         }, streamTransport, known);
         model = r.model;
         begin();
-        res.end(`${event({}, r.finishReason ?? 'stop', { noai: { receiptId: r.signed.receipt.receiptId, seq: r.entry.seq, payloadHash: r.signed.receipt.payloadHash, redactions: r.redactions } })}data: [DONE]\n\n`);
+        res.end(`${event({}, r.finishReason ?? 'stop', { noai: { receiptId: r.signed.receipt.receiptId, seq: r.entry.seq, payloadHash: r.signed.receipt.payloadHash, redactions: r.redactions, model: r.model, ...(r.fellBack ? { fellBack: true } : {}) } })}data: [DONE]\n\n`);
       } catch (e) {
         // Before the first piece there is still time to answer with a plain error; after it, end the stream with one.
         if (!begun) throw e;
@@ -289,6 +291,8 @@ async function main(): Promise<void> {
   createGatewayServer({ vault, cfg, tokens, models: list('NOAI_GATEWAY_MODELS'), allowedOrigins: list('NOAI_GATEWAY_ALLOWED_ORIGINS') }).listen(port, host, () => {
     console.log(`NOAI gateway on http://${host}:${String(port)}/v1  (data in ${root})`);
     console.log(`Forwarding to ${new URL(cfg.baseUrl).host} for ${String(tokens.size + people.length)} person(s): ${[...tokens.keys(), ...people.map((p) => p.name)].join(', ')}`);
+    if (cfg.fallback) console.log(`Fallback: ${cfg.fallback.model} at ${new URL(cfg.fallback.baseUrl).host}, when the main upstream fails or sends nothing within ${String(cfg.fallbackAfterMs)} ms`);
+    else if (process.env.NOAI_GATEWAY_FALLBACK_UPSTREAM) console.log('Warning: NOAI_GATEWAY_FALLBACK_UPSTREAM is set but NOAI_GATEWAY_FALLBACK_KEY is not, so there is no fallback.');
     console.log(`Receipts page: http://${host}:${String(port)}/admin${people.some((p) => p.role === 'admin') ? '' : '   (no admin yet: npm run staff -- add <name> --admin)'}`);
     if (!cfg.apiKey) console.log('Warning: no upstream key set. Every call will be refused until NOAI_GATEWAY_KEY or NEBIUS_API_KEY is set.');
   });

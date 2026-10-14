@@ -152,6 +152,17 @@ npm run gateway                  # http://127.0.0.1:7794/v1
 
 Each staff member gets their own token (24 characters or more) and uses it as the API key. Every receipt names who made the call, never the token. The gateway listens on 127.0.0.1 unless `NOAI_GATEWAY_HOST` and `NOAI_GATEWAY_PORT` say otherwise; an `Origin` header is refused unless listed in `NOAI_GATEWAY_ALLOWED_ORIGINS`. Other settings: `NOAI_GATEWAY_MODELS` (extra model ids to list), `NOAI_GATEWAY_MAX_PAYLOAD` (bytes, default 200000), `NOAI_GATEWAY_TIMEOUT_MS`.
 
+A second upstream, optional, for when the main one is unreliable:
+
+```bash
+NOAI_GATEWAY_FALLBACK_UPSTREAM=https://...     # any OpenAI-compatible base URL
+NOAI_GATEWAY_FALLBACK_KEY=...                  # or aws-role, exactly as for NOAI_GATEWAY_KEY
+NOAI_GATEWAY_FALLBACK_MODEL=...                # defaults to NOAI_MODEL
+NOAI_GATEWAY_FALLBACK_AFTER_MS=20000           # how long the main upstream gets
+```
+
+With these set, the gateway sends the same redacted messages to the fallback, once, when the main upstream cannot be reached, answers 429 after its waits, answers any other error status (5xx, 401 and 404 included), or answers with garbage (its first 200 characters are mostly one symbol, or one short piece repeated). A 400, 413 or 422 says the request itself is wrong and is not retried. When streaming, the main upstream must send its first word within `NOAI_GATEWAY_FALLBACK_AFTER_MS`, and its first 200 characters are held back until they pass the garbage check. Without streaming, its whole answer must arrive in that time. Once any word has reached the client the gateway never switches, so nobody sees half of one answer and the rest of another. Both attempts are receipted: the failed one with its outcome, the answer with the fallback's own model and host and `fellBack: true`. The last stream event (`noai.model`), the chat page and the receipts page name the model that answered. With no fallback set, nothing changes.
+
 What it does to every call, in this order: hide private values in every message (one placeholder space per request, plus every person the vault names), refuse anything over the byte ceiling, hash the exact body, send it, sign and chain a receipt (the redacted body is kept sealed in the vault), put the real values back in the reply.
 
 Limits, stated plainly:
@@ -185,7 +196,7 @@ The receipts page is `http://127.0.0.1:7794/admin`. An admin signs in with name 
 
 Tests: `test/staff.test.ts`.
 
-Tests: `test/gateway.test.ts` (names, phones and IDs never reach the provider; the receipt hash equals the sha256 of the body sent; a bad token gets 401; refused requests send nothing; concurrent calls keep the chain valid).
+Tests: `test/gateway.test.ts` (names, phones and IDs never reach the provider; the receipt hash equals the sha256 of the body sent; a bad token gets 401; refused requests send nothing; concurrent calls keep the chain valid) and `test/fallback.test.ts` (the second upstream answers when the main one fails, stalls or sends garbage, and the receipt names it).
 
 ## Agent vault: keys your AI agents use without seeing them
 
