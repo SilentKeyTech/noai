@@ -28,7 +28,7 @@
 <body>
 <div class="shell">
 <header class="glass gw-head">
-  <h1>NOAI</h1><span class="sub">Company gateway. What left this machine, who sent it, and proof it was not changed.</span>
+  <h1>NOAI</h1><span class="sub">Company gateway. You decide who uses AI and what they see, and you can prove what left this machine.</span>
   <span class="right"><span id="themes"></span><span class="hidden" id="who" style="display:flex;gap:10px;align-items:center"><span id="whoName"></span><button class="gw-btn ghost" id="logout">Sign out</button></span></span>
 </header>
 
@@ -44,9 +44,9 @@
   <div class="verdict" id="verdict"></div>
   <section class="glass"><h2>By person</h2>
   <table><thead><tr><th>Person</th><th>Calls</th><th>Bytes sent</th><th>Failed</th><th>Hidden before sending</th></tr></thead><tbody id="perStaff"></tbody></table></section>
-  <section class="glass"><h2>People</h2>
-  <table><thead><tr><th>Name</th><th>Role</th><th>Added</th><th></th></tr></thead><tbody id="staff"></tbody></table>
-  <div class="dim" style="margin-top:8px;font-size:13px">Add someone from the machine that runs the gateway: <span class="mono">npm run staff -- add &lt;name&gt;</span></div></section>
+  <section class="glass"><h2>People and what they may do</h2>
+  <table><thead><tr><th>Name</th><th>Role</th><th>Added</th><th>AI use</th><th>Models</th><th>Real values</th><th></th></tr></thead><tbody id="staff"></tbody></table>
+  <div class="dim" style="margin-top:8px;font-size:13px">Paused: every AI call is refused, nothing is sent. Placeholders only: the answer keeps [PERSON_1] and the like, so that person never sees the real values. Changes apply on their next call. Add someone from the machine that runs the gateway: <span class="mono">npm run staff -- add &lt;name&gt;</span></div></section>
   <section class="glass"><h2>Latest 200 calls</h2>
   <table><thead><tr><th>#</th><th>When</th><th>Who</th><th>Model</th><th>Bytes</th><th>Hidden</th><th></th></tr></thead><tbody id="tape"></tbody></table></section>
 </main>
@@ -72,10 +72,22 @@ async function load() {
   $('whoName').textContent = s.admin;
   const v = $('verdict'); v.className = 'verdict ' + (s.verdict.valid ? 'ok' : 'bad'); v.textContent = s.verdict.reason;
   $('perStaff').replaceChildren(...Object.entries(s.perStaff).map(([n, p]) => row(n, p.calls, p.bytes, p.failed ? el('span', p.failed, 'bad') : 0, chips(p.redactions))));
+  const setAccess = async (name, patch) => { try { await api('POST', '/admin/api/access', { name, ...patch }); } catch (x) { alert(x.message); } load(); };
+  const toggle = (label, cls, onclick) => { const b = el('button', label, 'gw-btn ' + cls); b.onclick = onclick; return b; };
   $('staff').replaceChildren(...s.staff.map((p) => {
     const act = el('span');
     if (!p.revokedAt && p.name !== s.admin) { const b = el('button', 'Revoke', 'gw-btn danger'); b.onclick = async () => { if (confirm('Revoke ' + p.name + '? Their token stops working on their next call.')) { await api('POST', '/admin/api/revoke', { name: p.name }); load(); } }; act.append(b); }
-    return row(p.name, p.role, p.revokedAt ? el('span', 'revoked ' + p.revokedAt.slice(0, 10), 'bad') : p.createdAt.slice(0, 10), act);
+    if (p.revokedAt) return row(p.name, p.role, el('span', 'revoked ' + p.revokedAt.slice(0, 10), 'bad'), '-', '-', '-', act);
+    const a = p.access;
+    const use = p.name === s.admin ? el('span', 'on') : toggle(a.paused ? 'Paused, resume' : 'On, pause', a.paused ? 'danger' : 'ghost', () => setAccess(p.name, { paused: !a.paused }));
+    const models = el('span');
+    models.append(el('span', a.models ? a.models.join(', ') : 'all', a.models ? 'mono' : 'dim'), ' ');
+    models.append(toggle('Change', 'ghost', () => {
+      const v = prompt('Models ' + p.name + ' may use, separated by commas. Leave empty for all.\nAvailable: ' + s.models.join(', '), a.models ? a.models.join(', ') : '');
+      if (v !== null) setAccess(p.name, { models: v.trim() ? v.split(',').map((m) => m.trim()).filter(Boolean) : null });
+    }));
+    const real = toggle(a.showReal ? 'Shown, hide' : 'Placeholders only, show', a.showReal ? 'ghost' : 'danger', () => setAccess(p.name, { showReal: !a.showReal }));
+    return row(p.name, p.role, p.createdAt.slice(0, 10), use, models, real, act);
   }));
   $('tape').replaceChildren(...s.entries.flatMap((e) => {
     const detail = el('pre'); detail.classList.add('hidden');

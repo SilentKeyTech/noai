@@ -397,10 +397,13 @@ export async function forwardChat(
   transport: Transport = httpTransport,
   /** names to always hide, usually knownPeople(readNotes(v)) */
   known: RedactOptions = {},
+  /** showReal false: the answer keeps its placeholders, for a person not allowed to see the real values */
+  access: { showReal?: boolean } = {},
 ): Promise<GatewayResult> {
   const started = Date.now();
   if (!cfg.apiKey) throw new GatewayError('The gateway has no upstream key (NOAI_GATEWAY_KEY or NEBIUS_API_KEY). Nothing was sent.', 503);
-  const { body, model, counts, map } = gatewayBody(req, cfg, known);
+  const { body, model, counts, map: hidden } = gatewayBody(req, cfg, known);
+  const map = access.showReal === false ? new Map<string, string>() : hidden;
   checkBudget(body, cfg);
 
   const attempt = async (up: GatewayUpstream, body: string, deadlineMs: number, fellBack: boolean, canFallBack: boolean): Promise<GatewayResult> => {
@@ -517,10 +520,12 @@ export async function forwardChatStream(
   onPiece: (text: string, model: string) => void,
   transport: StreamTransport = httpStreamTransport,
   known: RedactOptions = {},
+  access: { showReal?: boolean } = {},
 ): Promise<GatewayStreamResult> {
   const started = Date.now();
   if (!cfg.apiKey) throw new GatewayError('The gateway has no upstream key (NOAI_GATEWAY_KEY or NEBIUS_API_KEY). Nothing was sent.', 503);
-  const { body, model, counts, map } = gatewayBody(req, cfg, known, true);
+  const { body, model, counts, map: hidden } = gatewayBody(req, cfg, known, true);
+  const map = access.showReal === false ? new Map<string, string>() : hidden;
   checkBudget(body, cfg);
 
   const attempt = async (up: GatewayUpstream, body: string, fellBack: boolean, canFallBack: boolean): Promise<GatewayStreamResult> => {
