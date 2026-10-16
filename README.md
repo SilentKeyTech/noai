@@ -1,5 +1,9 @@
 # NOAI
 
+**It delivers what it cannot see.**
+
+*The AI writes the answer. NOAI hides the names before they leave your device and puts them back when the answer returns.*
+
 Pronounced No Eye. A personal AI that answers questions about your private life without the model ever seeing it.
 
 **Live demo (fictional data):** https://noai-silentkey.netlify.app
@@ -138,6 +142,8 @@ npx @modelcontextprotocol/inspector --cli http://127.0.0.1:7792/mcp --transport 
 The server listens on 127.0.0.1 by default and every request needs the bearer token. An `Origin` header is refused unless listed in `NOAI_MCP_ALLOWED_ORIGINS`. To reach it from a hosted assistant, put it behind an HTTPS tunnel you control (`NOAI_MCP_HOST`, `NOAI_MCP_PORT`); the vault, the keys and the ledger stay on your machine.
 
 ## Company gateway
+
+**It delivers what it cannot see.** The AI writes the answer. NOAI hides the names before they leave the company's machine and puts them back when the answer returns.
 
 A company's staff keep using the AI tool they already use. The tool points at NOAI instead of the AI provider. NOAI hides private data on the company's own machine, forwards the call, signs a receipt, and puts the real values back in the answer.
 
