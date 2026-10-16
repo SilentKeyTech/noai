@@ -1,5 +1,9 @@
 # NOAI
 
+**It delivers what it cannot see.**
+
+*The AI writes the answer. NOAI hides the names before they leave your device and puts them back when the answer returns.*
+
 Pronounced No Eye. A personal AI that answers questions about your private life without the model ever seeing it.
 
 **Live demo (fictional data):** https://noai-silentkey.netlify.app
@@ -139,6 +143,8 @@ The server listens on 127.0.0.1 by default and every request needs the bearer to
 
 ## Company gateway
 
+**It delivers what it cannot see.** The AI writes the answer. NOAI hides the names before they leave the company's machine and puts them back when the answer returns.
+
 A company's staff keep using the AI tool they already use. The tool points at NOAI instead of the AI provider. NOAI hides private data on the company's own machine, forwards the call, signs a receipt, and puts the real values back in the answer.
 
 It is an OpenAI-compatible endpoint (`POST /v1/chat/completions`, `GET /v1/models`), so anything that lets you set a base URL works: Open WebUI, LibreChat, Continue, scripts, the OpenAI SDKs.
@@ -173,6 +179,7 @@ Limits, stated plainly:
 - Only settings that carry no text are forwarded (temperature, top_p, max_tokens, stop, n, seed, penalties). Anything else the client sends, such as `user` or `metadata`, is dropped.
 - Streaming is real: words arrive as the provider writes them, with the real values put back in each piece. A placeholder cut in two by the network is held back until it is whole. The receipt is written when the stream ends. If a stream breaks part way, the client gets an error event and the call is receipted as an error.
 - Tokens do not expire. Revoke a person and their token stops on their next call. There is no single sign-on, no email invite and no per-person spending limit yet.
+- Access is per person, not per document: NOAI decides who may use AI, which models and whether they see real values. It does not decide which files someone may ask about.
 
 ### A chat page, nothing else to install
 
@@ -192,9 +199,27 @@ npm run staff -- list
 npm run staff -- revoke amal
 ```
 
-The receipts page is `http://127.0.0.1:7794/admin`. An admin signs in with name and password and sees: whether the chain is intact (red and the entry number if anything was edited), calls, bytes and hidden values per person, and the latest 200 calls. "Read what was sent" shows the redacted text that left, never the real values. Admins can revoke people; nobody can revoke themselves. Five wrong passwords lock that name for five minutes. The session cookie is HttpOnly and SameSite=Strict, the page refuses any Host that is not the machine's own (DNS rebinding), and it puts server text on the screen as text only. A staff token cannot read receipts.
+### Who may do what
 
-Tests: `test/staff.test.ts`.
+The admin decides, per person, and it applies on their next call:
+
+- **AI use on or paused.** A paused person keeps their token, but every call is refused with 403 and nothing is sent.
+- **Which models.** Limit someone to a list; `GET /v1/models` shows them only those, and any other model, the default included, is refused before anything is sent.
+- **Real values or placeholders only.** With placeholders only, private values are still hidden going out, and the answer keeps `[PERSON_1]`, `[EMAIL_1]` and the like instead of putting the real values back. Use it for someone who should get the AI's help without seeing the details.
+
+Set it on the receipts page (People and what they may do), or on the machine:
+
+```bash
+npm run staff -- set amal --pause            # --resume to undo
+npm run staff -- set amal --models model-a,model-b   # --all-models to lift the limit
+npm run staff -- set amal --hide-real        # --show-real to undo
+```
+
+People with no setting may do everything, as before. People listed in `NOAI_GATEWAY_TOKENS` always have full access; use `npm run staff` for anyone whose access should be limited. An admin cannot pause themselves.
+
+The receipts page is `http://127.0.0.1:7794/admin`. An admin signs in with name and password and sees: whether the chain is intact (red and the entry number if anything was edited), calls, bytes and hidden values per person, and the latest 200 calls. "Read what was sent" shows the redacted text that left, never the real values. Admins can revoke people and set what each one may do (below); nobody can revoke or pause themselves. Five wrong passwords lock that name for five minutes. The session cookie is HttpOnly and SameSite=Strict, the page refuses any Host that is not the machine's own (DNS rebinding), and it puts server text on the screen as text only. A staff token cannot read receipts.
+
+Tests: `test/staff.test.ts`, and `test/access.test.ts` (a paused person sends nothing; a model outside someone's list is refused before sending; placeholders-only answers never carry the real value, streamed or not; only a signed-in admin can change access).
 
 Tests: `test/gateway.test.ts` (names, phones and IDs never reach the provider; the receipt hash equals the sha256 of the body sent; a bad token gets 401; refused requests send nothing; concurrent calls keep the chain valid) and `test/fallback.test.ts` (the second upstream answers when the main one fails, stalls or sends garbage, and the receipt names it).
 

@@ -6,8 +6,14 @@
  * person is added. Revoking someone takes effect on their next call, because
  * the file is read on every request.
  *
- *   admin  may read the receipts page and revoke staff; needs a password.
+ *   admin  may read the receipts page, revoke staff and set their access; needs a password.
  *   staff  may use the gateway with a token, nothing else.
+ *
+ * Access is per person and read on every request, like revoking:
+ *   paused     the token still exists but every AI call is refused
+ *   models     only these model ids; absent means every listed model
+ *   showReal   false leaves the placeholders in the answer, so this person
+ *              never sees the real values the gateway hid
  */
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -17,9 +23,23 @@ import { sha256 } from './crypto.ts';
 
 export type Role = 'admin' | 'staff';
 
+export interface Access {
+  paused?: boolean;
+  models?: string[];
+  showReal?: boolean;
+}
+
+/** What a person may do. No access record means everything. */
+export const accessOf = (s: Pick<StaffRecord, 'access'> | null | undefined): { paused: boolean; models: string[] | null; showReal: boolean } => ({
+  paused: s?.access?.paused === true,
+  models: s?.access?.models?.length ? [...s.access.models] : null,
+  showReal: s?.access?.showReal !== false,
+});
+
 export interface StaffRecord {
   name: string;
   role: Role;
+  access?: Access;
   /** sha256 of the token; the token itself is never stored */
   tokenHash: string;
   /** scrypt of the password, admins only */
@@ -74,6 +94,31 @@ export async function revokeStaff(root: string, name: string): Promise<boolean> 
   return true;
 }
 
+const MODEL_ID = /^[\w./:@+-]{1,200}$/;
+
+/**
+ * Change what one active person may do. Only the fields given change;
+ * `models: []` or `null` lifts the model limit.
+ */
+export async function setAccess(root: string, name: string, patch: { paused?: boolean; models?: string[] | null; showReal?: boolean }): Promise<StaffRecord | null> {
+  const list = await readStaff(root);
+  const who = list.find((s) => s.name === name && !s.revokedAt);
+  if (!who) return null;
+  const next: Access = { ...who.access };
+  if (patch.paused !== undefined) next.paused = patch.paused === true;
+  if (patch.showReal !== undefined) next.showReal = patch.showReal !== false;
+  if (patch.models !== undefined) {
+    const ids = [...new Set((patch.models ?? []).map((m) => m.trim()).filter(Boolean))];
+    const bad = ids.find((m) => !MODEL_ID.test(m));
+    if (bad !== undefined) throw new Error(`"${bad.slice(0, 40)}" is not a model id.`);
+    if (ids.length) next.models = ids;
+    else delete next.models;
+  }
+  who.access = next;
+  await writeStaff(root, list);
+  return who;
+}
+
 const same = (a: string, b: string): boolean => {
   const x = Buffer.from(a);
   const y = Buffer.from(b);
@@ -81,13 +126,13 @@ const same = (a: string, b: string): boolean => {
 };
 
 /** The person this bearer token belongs to, or null. Every record is compared, in constant time. */
-export async function authenticateToken(root: string, header: string | undefined): Promise<{ name: string; role: Role } | null> {
+export async function authenticateToken(root: string, header: string | undefined): Promise<{ name: string; role: Role; access: ReturnType<typeof accessOf> } | null> {
   const token = /^Bearer\s+(.+)$/i.exec(header ?? '')?.[1];
   if (!token) return null;
   const given = sha256(token);
   let found: StaffRecord | null = null;
   for (const s of await readStaff(root)) if (same(given, s.tokenHash) && !s.revokedAt) found = s;
-  return found ? { name: found.name, role: found.role } : null;
+  return found ? { name: found.name, role: found.role, access: accessOf(found) } : null;
 }
 
 /** Check an admin's password. A wrong name costs the same time as a wrong password. */

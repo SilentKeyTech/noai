@@ -68,7 +68,7 @@ describe('staff store', () => {
   it('authenticates the right token and nothing close to it', async () => {
     const g = await start();
     const { token } = await addStaff(g.root, 'omar');
-    assert.deepEqual(await authenticateToken(g.root, `Bearer ${token}`), { name: 'omar', role: 'staff' });
+    assert.deepEqual(await authenticateToken(g.root, `Bearer ${token}`), { name: 'omar', role: 'staff', access: { paused: false, models: null, showReal: true } });
     for (const bad of [`Bearer ${token}x`, `Bearer ${token.slice(0, -1)}`, 'Bearer ', undefined, token]) assert.equal(await authenticateToken(g.root, bad), null);
     await g.close();
   });

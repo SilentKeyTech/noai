@@ -23,7 +23,7 @@ import { forwardChat, forwardChatStream, type GatewayConfig, GatewayError, gatew
 import { noaiHome } from './home.ts';
 import { readLedger, readReceipts, verifyLedger } from './ledger.ts';
 import { knownPeople } from './people.ts';
-import { authenticateToken, checkPassword, readStaff, revokeStaff } from './staff.ts';
+import { accessOf, authenticateToken, checkPassword, readStaff, revokeStaff, setAccess } from './staff.ts';
 import { type OpenVault, openVault, readDisclosure, readNotes } from './vault.ts';
 
 const MAX_BODY = 1024 * 1024;
@@ -167,7 +167,8 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
         admin: name,
         verdict: verifyLedger(entries, receipts),
         perStaff,
-        staff: (await readStaff(root)).map((s) => ({ name: s.name, role: s.role, createdAt: s.createdAt, revokedAt: s.revokedAt ?? null })),
+        staff: (await readStaff(root)).map((s) => ({ name: s.name, role: s.role, createdAt: s.createdAt, revokedAt: s.revokedAt ?? null, access: accessOf(s) })),
+        models,
         entries: entries.slice(-200).reverse().map((e) => {
           const r = byId.get(e.receiptId);
           return { seq: e.seq, receiptId: e.receiptId, at: e.at, model: e.model, bytes: e.payloadBytes, hash: e.payloadHash, client: r?.client ?? null, endpoint: r?.endpoint ?? null, redactions: r?.redactions ?? {}, outcome: r?.outcome ?? null, fellBack: r?.fellBack === true };
@@ -185,6 +186,31 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
       if (!b || typeof b.name !== 'string') return fail(res, 400, 'Which person?');
       if (b.name === name) return fail(res, 400, 'You cannot revoke yourself.');
       return (await revokeStaff(root, b.name)) ? send(res, 200, { ok: true }) : fail(res, 404, 'No such active person.');
+    }
+    if (path === '/admin/api/access' && req.method === 'POST') {
+      const raw = await readBody(req);
+      const b = raw === null ? null : (JSON.parse(raw) as { name?: unknown; paused?: unknown; models?: unknown; showReal?: unknown });
+      if (!b || typeof b.name !== 'string') return fail(res, 400, 'Which person?');
+      const patch: Parameters<typeof setAccess>[2] = {};
+      if (b.paused !== undefined) {
+        if (typeof b.paused !== 'boolean') return fail(res, 400, 'paused is true or false.');
+        if (b.paused && b.name === name) return fail(res, 400, 'You cannot pause yourself.');
+        patch.paused = b.paused;
+      }
+      if (b.showReal !== undefined) {
+        if (typeof b.showReal !== 'boolean') return fail(res, 400, 'showReal is true or false.');
+        patch.showReal = b.showReal;
+      }
+      if (b.models !== undefined) {
+        if (b.models !== null && !(Array.isArray(b.models) && b.models.every((m) => typeof m === 'string'))) return fail(res, 400, 'models is a list of model ids, or null for all.');
+        patch.models = b.models as string[] | null;
+      }
+      try {
+        const who = await setAccess(root, b.name, patch);
+        return who ? send(res, 200, { ok: true, access: accessOf(who) }) : fail(res, 404, 'No such active person.');
+      } catch (e) {
+        return fail(res, 400, e instanceof Error ? e.message : String(e));
+      }
     }
     return fail(res, 404, 'Not found.');
   };
@@ -209,12 +235,18 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
     // The chat page calls this API from its own address; any other page must be listed.
     const ownOrigin = !!origin && hostOk(req) && (origin === `http://${req.headers.host}` || origin === `https://${req.headers.host}`);
     if (origin && !ownOrigin && !allowedOrigins.includes(origin)) return fail(res, 403, 'Origin not allowed.');
-    const client = who(req.headers.authorization, tokens) ?? (await authenticateToken(root, req.headers.authorization))?.name ?? null;
+    // People from NOAI_GATEWAY_TOKENS have no access record, so they may do everything.
+    const fromEnv = who(req.headers.authorization, tokens);
+    const person = fromEnv ? null : await authenticateToken(root, req.headers.authorization);
+    const client = fromEnv ?? person?.name ?? null;
     if (!client) return fail(res, 401, 'Unauthorized.', { 'www-authenticate': 'Bearer realm="noai"' });
+    const access = person?.access ?? accessOf(null);
+    if (access.paused) return fail(res, 403, 'Your admin has paused AI use for you. Nothing was sent.');
+    const mine = access.models ? models.filter((m) => access.models?.includes(m)) : models;
 
     if (path === '/v1/models') {
       if (req.method !== 'GET') return fail(res, 405, 'Use GET.', { allow: 'GET' });
-      return send(res, 200, { object: 'list', data: models.map((id) => ({ id, object: 'model', created: 0, owned_by: 'noai-gateway' })) });
+      return send(res, 200, { object: 'list', data: mine.map((id) => ({ id, object: 'model', created: 0, owned_by: 'noai-gateway' })) });
     }
     if (path !== '/v1/chat/completions') return fail(res, 404, 'Not found.');
     if (req.method !== 'POST') return fail(res, 405, 'Use POST.', { allow: 'POST' });
@@ -229,6 +261,11 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
     }
     if (!json || typeof json !== 'object' || Array.isArray(json)) return fail(res, 400, 'The body must be a JSON object.');
     const request = json as Record<string, unknown>;
+    if (access.models) {
+      const asked = typeof request.model === 'string' && request.model ? request.model : opts.cfg.model;
+      if (!access.models.includes(asked)) return fail(res, 403, `You may not use ${asked.slice(0, 80)}. Nothing was sent. Ask your admin, or use: ${access.models.join(', ')}`);
+    }
+    const shown = { showReal: access.showReal };
 
     // Names are re-read per request, so a contact added to the vault is hidden from the next call.
     const known = knownPeople(readNotes(opts.vault));
@@ -251,7 +288,7 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
           model = answering;
           begin();
           res.write(event({ content: text }));
-        }, streamTransport, known);
+        }, streamTransport, known, shown);
         model = r.model;
         begin();
         res.end(`${event({}, r.finishReason ?? 'stop', { noai: { receiptId: r.signed.receipt.receiptId, seq: r.entry.seq, payloadHash: r.signed.receipt.payloadHash, redactions: r.redactions, model: r.model, ...(r.fellBack ? { fellBack: true } : {}) } })}data: [DONE]\n\n`);
@@ -263,7 +300,7 @@ export function createGatewayServer(opts: GatewayServerOptions): Server {
       }
       return;
     }
-    const r = await forwardChat(opts.vault, opts.cfg, request, client, transport, known);
+    const r = await forwardChat(opts.vault, opts.cfg, request, client, transport, known, shown);
     send(res, 200, r.response);
   };
 
