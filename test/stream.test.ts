@@ -186,7 +186,7 @@ describe('the chat page', () => {
     const g = await start(s);
     const page = await g.call('/chat', { method: 'GET', headers: { authorization: '' } });
     assert.equal(page.status, 200);
-    assert.match(await page.text(), /NOAI chat/);
+    assert.match(await page.text(), /NOAI\+ chat/);
     assert.match(page.headers.get('content-security-policy') ?? '', /frame-ancestors 'none'/);
     const own = await g.call('/v1/chat/completions', { headers: { origin: `http://127.0.0.1:${String(g.port)}` }, body: chat('hi') });
     assert.equal(own.status, 200, 'the chat page could not call its own gateway');

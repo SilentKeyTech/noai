@@ -17,7 +17,7 @@ const C = {
     body: '<circle class="b" cx="60" cy="60" r="52"/><circle class="s" cx="60" cy="60" r="44" stroke-width="5"/>',
     open: '<path class="i" d="M32 54A28 28 0 0 1 88 54Q60 60 32 54Z"/><ellipse class="i soft" cx="60" cy="68" rx="18" ry="4"/>',
     happy: '<path class="s" d="M34 66Q60 38 86 66" stroke-width="7"/>',
-    closed: '<path class="i" d="M32 56A28 28 0 0 1 88 56Q60 80 32 56Z"/>',
+    closed: '<path class="s" d="M34 60H86" stroke-width="7"/>',
     calm: '', smile: '', o: '',
     say: {
       sleep: () => 'Your vault is locked. I cannot read a thing until you open it.',
