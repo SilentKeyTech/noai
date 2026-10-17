@@ -18,9 +18,11 @@
     "vault": "node --env-file-if-exists=.env src/vault-cli.ts",
     "model": "node scripts/fetch-model.ts",
     "build:web": "node scripts/build-web.ts",
-    "pretest": "node scripts/build-web.ts",
+    "pretest": "node scripts/build-web.ts && node scripts/build-extension.ts",
     "test": "node --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p extension",
+    "build:extension": "node scripts/build-extension.ts",
+    "extension:test-page": "node scripts/extension-test-page.ts"
   },
   "dependencies": {
     "@noble/curves": "2.4.0",
@@ -29,6 +31,7 @@
     "pdfjs-dist": "6.3.289"
   },
   "devDependencies": {
+    "@types/chrome": "^0.1.24",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2"
   }

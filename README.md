@@ -223,6 +223,47 @@ Tests: `test/staff.test.ts`, and `test/access.test.ts` (a paused person sends no
 
 Tests: `test/gateway.test.ts` (names, phones and IDs never reach the provider; the receipt hash equals the sha256 of the body sent; a bad token gets 401; refused requests send nothing; concurrent calls keep the chain valid) and `test/fallback.test.ts` (the second upstream answers when the main one fails, stalls or sends garbage, and the receipt names it).
 
+### Browser extension
+
+The gateway protects apps that can be pointed at it. The ChatGPT, Copilot and Gemini websites cannot, so staff who type into them get no protection from the gateway. The NOAI+ browser extension (Chrome and Edge, Manifest V3, in `extension/`) covers that case: staff keep using the real websites, and the extension hides private details before they send.
+
+When someone presses Enter or the send button on chatgpt.com, copilot.microsoft.com or gemini.google.com:
+
+1. The extension runs NOAI's own redaction (`src/redact.ts`, the same code the gateway uses) on the text, on the computer.
+2. If it finds anything, it stops that press, puts the text with placeholders such as `[PERSON_1]` and `[PHONE_1]` in the chat box, and shows a small panel listing what was hidden, with **Send protected** and **Undo, send as written**.
+3. A second press (Enter, the site's button, or Send protected) sends the text with placeholders.
+4. In the answer, the extension draws the real values over the placeholders on screen only. The values are drawn inside closed shadow roots, so the website's own scripts still read `[PERSON_1]`.
+
+A placeholder keeps its number across messages, so a name hidden in the first message is the same `[PERSON_1]` in the tenth, and a name hidden once is hidden again when it comes back alone. The table of placeholders and real values stays in the browser's extension storage on that computer, for `keepDays` days (30 by default), and the popup can forget it at once.
+
+Each send gets a signed receipt in the gateway's own format (a hash of the text and the counts of what was hidden, never the text), chained the same way, so `verifyLedger` in `src/ledger.ts` checks an export unchanged. The toolbar popup exports them as JSON. The extension makes no network requests of its own; nothing goes to Silent Key.
+
+**Company policy.** An admin pushes rules through Chrome or Edge enterprise policy (`managed_schema.json`; staff cannot change them) or edits `extension/policy.json` before handing it out: which sites are covered, words always hidden (client names, project code names become `[TERM_1]`), people always hidden, whether to ask before sending, whether staff may send as written, and a staff label for the receipts. A missing or mistyped field falls back to the safe default.
+
+**When the site changes.** Each site's selectors live in one small file under `extension/src/sites/`. If the extension cannot find the chat box on a covered site, it refuses to send and says so; it never lets text through unchecked.
+
+**Limits, plainly:**
+
+- It covers text typed into the chat box only. File uploads, pasted images, voice input and the sites' desktop and phone apps are not covered yet.
+- Chat sites change their pages often. A change can stop the extension from finding the box (it then blocks sending and warns) or from drawing values back (the answer then shows placeholders).
+- It hides what it recognises. Anything it does not recognise is sent as typed. It does not make data anonymous and it does not make a company compliant.
+- The site's own Copy button copies the placeholders, not the real values.
+- Someone can choose "send as written" unless the policy turns that off; the receipt then says so.
+
+**Try it without an account:**
+
+```bash
+npm run build:extension
+```
+
+```bash
+npm run extension:test-page
+```
+
+Then in Chrome or Edge open `chrome://extensions`, turn on Developer mode, choose Load unpacked and pick the `extension` folder, and open `http://127.0.0.1:8737/noai-extension-test/`. The test page copies ChatGPT's chat box and shows, on the right, exactly what the website received.
+
+Tests: `test/extension.test.ts` (names, phones, emails and IDs never stay in the box that is sent; placeholders keep their numbers across messages; the real text comes back whole; the send hook stops the first press, lets the second through, fails closed when the box is missing, and records one receipt per send; receipts verify with `src/ledger.ts`).
+
 ## Agent vault: keys your AI agents use without seeing them
 
 Coding agents such as Claude Code need API keys to do real work. Pasting a key into the chat puts it in the agent's context, its logs and its model provider's servers. NOAI's agent vault keeps the key on your machine instead:

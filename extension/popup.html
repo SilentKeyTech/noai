@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NOAI+</title>
+<style>
+  @font-face { font-family: 'Tenor Sans'; src: url('tenor-sans.woff2') format('woff2'); font-weight: 400; }
+  :root { color-scheme: light; --ink: #1A1410; --ink2: rgba(26,20,16,.72); --rule: rgba(26,20,16,.12); }
+  body { margin: 0; width: 320px; font: 14px/1.45 "Tenor Sans", -apple-system, "Segoe UI", system-ui, sans-serif; color: var(--ink);
+    background: radial-gradient(260px 200px at 0% 0%, #FFD2A1 0%, rgba(255,210,161,0) 70%), radial-gradient(260px 220px at 100% 100%, #FF9A4D 0%, rgba(255,154,77,0) 70%), #FFEBD8; }
+  main { padding: 16px; }
+  .top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .top img { width: 28px; height: 28px; }
+  h1 { font: inherit; font-size: 17px; margin: 0; }
+  .card { background: rgba(255,255,255,.62); border: 1px solid rgba(255,255,255,.95); border-radius: 14px; padding: 12px; margin-bottom: 10px; }
+  .stat { display: flex; justify-content: space-between; padding: 4px 0; border-top: 1px solid var(--rule); }
+  .stat:first-child { border-top: 0; }
+  .stat b { font-weight: 400; }
+  p { margin: 0 0 8px; color: var(--ink2); }
+  button { font: inherit; cursor: pointer; border-radius: 10px; padding: 8px 12px; border: 1px solid transparent; width: 100%; margin-top: 6px; }
+  .go { background: #2E2E34; color: #FFB27A; }
+  .alt { background: transparent; color: var(--ink); border-color: rgba(26,20,16,.25); }
+  button:focus-visible { outline: 2px solid #9A3412; outline-offset: 2px; }
+  .small { font-size: 12px; color: var(--ink2); margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="top"><img src="icons/48.png" alt=""><h1>NOAI+</h1></div>
+  <div class="card">
+    <div class="stat"><span>Covered sites</span><b id="sites">…</b></div>
+    <div class="stat"><span>Values kept for restoring</span><b id="kept">…</b></div>
+    <div class="stat"><span>Signed receipts</span><b id="count">…</b></div>
+  </div>
+  <button class="go" id="export">Export receipts</button>
+  <button class="alt" id="forget">Forget kept values</button>
+  <p class="small">NOAI+ hides what it recognises in text you type. It does not cover files you upload, and it does not make data anonymous. Nothing is sent to Silent Key.</p>
+</main>
+<script type="module" src="lib/extension/src/popup.js"></script>
+</body>
+</html>
