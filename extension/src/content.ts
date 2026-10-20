@@ -73,22 +73,73 @@ const tidy = (s: string): string => s.replace(/[\u200B-\u200F\u2060\uFEFF]/g, ''
  * change. A textarea shows it at once; a rich editor such as Lexical draws it
  * a moment later, and the guard waits for that before it trusts the box.
  */
-function writeBox(el: HTMLElement, text: string): boolean {
+function selectAllIn(el: HTMLElement): void {
   el.focus();
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
     el.select();
-  } else {
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    const sel = getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
+    return;
   }
-  // execCommand is deprecated but is still the one way to type into ProseMirror, Quill and React textareas alike.
-  const took = document.execCommand('insertText', false, text);
-  if (!(el instanceof HTMLTextAreaElement)) return took;
+  // selectAll goes through the editor's own command; the range is a fallback for editors that ignore it
+  document.execCommand('selectAll');
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+}
+
+/**
+ * Put `text` over the selection in a rich editor. Lexical (Copilot) ignores
+ * insertText sent from an extension's isolated world but takes a paste, and
+ * ProseMirror and Quill take one too; a plain contenteditable that does not
+ * handle paste gets insertText instead.
+ */
+function pasteOrType(el: HTMLElement, text: string): boolean {
+  const data = new DataTransfer();
+  data.setData('text/plain', text);
+  const paste = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true });
+  el.dispatchEvent(paste);
+  if (paste.defaultPrevented) return true;
+  // execCommand is deprecated but is still the way to type into a plain contenteditable or a React textarea.
+  return document.execCommand('insertText', false, text);
+}
+
+/**
+ * Lexical reads a new selection a moment after it is made (on selectionchange),
+ * so a paste sent in the same instant lands at the old caret and adds to the
+ * text instead of replacing it. Select, wait, then paste.
+ */
+const SELECT_WAIT_MS = 50;
+/** if the box still shows exactly what it showed before, the editor missed it: select and paste again */
+const RETRY_MS = [300, 600];
+/** only the latest write to a box acts, so a late step never puts back text the guard has since replaced */
+const writes = new WeakMap<HTMLElement, number>();
+
+function writeBox(el: HTMLElement, text: string): boolean {
+  const n = (writes.get(el) ?? 0) + 1;
+  writes.set(el, n);
+  if (!(el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement)) {
+    const before = tidy(readBox(el));
+    const latest = (): boolean => writes.get(el) === n && el.isConnected;
+    const replace = (): void => {
+      selectAllIn(el);
+      setTimeout(() => {
+        if (latest()) pasteOrType(el, text);
+      }, SELECT_WAIT_MS);
+    };
+    replace();
+    for (const ms of RETRY_MS) {
+      setTimeout(() => {
+        // retry only when nothing happened at all; a box that changed is left for the guard to judge
+        if (latest() && tidy(readBox(el)) === before && before !== tidy(text)) replace();
+      }, ms);
+    }
+    return true;
+  }
+  selectAllIn(el);
+  document.execCommand('insertText', false, text);
   if (tidy(readBox(el)) === tidy(text)) return true;
-  const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el) as object, 'value')?.set;
   set?.call(el, text);
   el.dispatchEvent(new Event('input', { bubbles: true }));
   return tidy(readBox(el)) === tidy(text);

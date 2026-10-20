@@ -82,7 +82,7 @@ export const NO_BUTTON = 'NOAI+ could not find the send button. Press Enter in t
 const tidy = (s: string): string => s.replace(/[\u200B-\u200F\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
 
 /** how long an editor may take to show text it was given; Lexical (Copilot) takes about 50 ms */
-export const SETTLE_MS = 800;
+export const SETTLE_MS = 1500;
 const STEP_MS = 25;
 
 export class SendGuard {
