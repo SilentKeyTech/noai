@@ -11,7 +11,8 @@ export type Message =
   | { type: 'policy' }
   | { type: 'receipt'; facts: Omit<SendFacts, 'at'> }
   | { type: 'export' }
-  | { type: 'forget' };
+  | { type: 'forget' }
+  | { type: 'active' };
 
 async function policy(): Promise<Policy> {
   let packed: unknown = null;
@@ -54,7 +55,7 @@ function addReceipt(facts: Omit<SendFacts, 'at'>): Promise<SignedDisclosure> {
   return run;
 }
 
-chrome.runtime.onMessage.addListener((msg: Message, _sender, reply) => {
+chrome.runtime.onMessage.addListener((msg: Message, sender, reply) => {
   const answer = async (): Promise<unknown> => {
     switch (msg.type) {
       case 'policy':
@@ -64,6 +65,14 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, reply) => {
       case 'export': {
         const { receipts = [], ledger = [] } = await chrome.storage.local.get(['receipts', 'ledger']);
         return { receipts, ledger, signer: (await getSigner()).publicKey };
+      }
+      case 'active': {
+        const tabId = sender.tab?.id;
+        if (tabId === undefined) return false;
+        await chrome.action.setBadgeBackgroundColor({ tabId, color: '#F25C05' });
+        await chrome.action.setBadgeText({ tabId, text: 'ON' });
+        await chrome.action.setTitle({ tabId, title: 'NOAI+ is protecting this page' });
+        return true;
       }
       case 'forget':
         await chrome.storage.local.remove('table');

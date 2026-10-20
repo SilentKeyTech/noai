@@ -357,6 +357,7 @@ describe('policy and sites', () => {
     const all = SITES.map((s) => s.id);
     assert.equal(siteFor('chatgpt.com', '/c/1', all)?.id, 'chatgpt');
     assert.equal(siteFor('copilot.microsoft.com', '/', all)?.id, 'copilot');
+    assert.equal(siteFor('copilot.com', '/chats/1', all)?.id, 'copilot', 'copilot.microsoft.com now redirects here');
     assert.equal(siteFor('gemini.google.com', '/app', all)?.id, 'gemini');
     assert.equal(siteFor('chatgpt.com', '/', ['gemini']), null);
     assert.equal(siteFor('127.0.0.1', '/noai-extension-test/', all)?.id, 'local-test');

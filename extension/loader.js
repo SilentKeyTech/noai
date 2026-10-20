@@ -13,6 +13,8 @@
     const label = [b.getAttribute('aria-label'), b.getAttribute('title'), b.getAttribute('data-testid'), b.textContent].join(' ');
     return SEND_WORDS.test(label) || b.getAttribute('type') === 'submit';
   };
+  // inside a shadow root e.target is only the host; the path starts where the event really did
+  const origin = (e) => e.composedPath()[0] ?? e.target;
   const stop = (e) => {
     e.preventDefault();
     e.stopImmediatePropagation();
@@ -21,7 +23,7 @@
     'keydown',
     (e) => {
       const g = window.__noaiGuard;
-      const v = g ? g.key(e) : e.key === 'Enter' && !e.shiftKey && !e.isComposing && editable(e.target) ? 'stop' : 'pass';
+      const v = g ? g.key(e) : e.key === 'Enter' && !e.shiftKey && !e.isComposing && editable(origin(e)) ? 'stop' : 'pass';
       if (v === 'stop') stop(e);
     },
     true,
@@ -30,7 +32,7 @@
     'click',
     (e) => {
       const g = window.__noaiGuard;
-      const v = g ? g.click(e) : sendLike(e.target) ? 'stop' : 'pass';
+      const v = g ? g.click(e) : sendLike(origin(e)) ? 'stop' : 'pass';
       if (v === 'stop') stop(e);
     },
     true,
