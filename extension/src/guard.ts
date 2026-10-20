@@ -78,13 +78,20 @@ export const NO_BOX =
 export const NOT_TAKEN = 'NOAI+ could not put the protected text in the chat box. Nothing was sent.';
 export const NO_BUTTON = 'NOAI+ could not find the send button. Press Enter in the chat box to send the protected text.';
 
-const tidy = (s: string): string => s.replace(/\s+/g, ' ').trim();
+/** two box readings are the same text when only spacing and invisible characters differ; some editors add zero width marks */
+const tidy = (s: string): string => s.replace(/[\u200B-\u200F\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+
+/** how long an editor may take to show text it was given; Lexical (Copilot) takes about 50 ms */
+export const SETTLE_MS = 800;
+const STEP_MS = 25;
 
 export class SendGuard {
   /** the text that was cleared to go, and what it hides */
   private cleared: { text: string; sent: Sent } | null = null;
   /** set while the guard presses the send button itself */
   private pressing = false;
+  /** set while waiting for the box to show the text the guard gave it; every press is held meanwhile */
+  private waiting = false;
 
   private readonly page: Page;
   private readonly ui: Ui;
@@ -102,7 +109,7 @@ export class SendGuard {
 
   onKey(e: KeyLike): Verdict {
     if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return 'pass';
-    if (this.page.inComposer(e.target)) return this.check();
+    if (this.page.inComposer(e.target)) return this.waiting ? 'stop' : this.check();
     // A covered site whose box cannot be found: Enter in anything editable may be the message going out.
     if (this.page.isEditable(e.target) && !this.page.composer()) return this.refuse(NO_BOX);
     return 'pass';
@@ -110,7 +117,7 @@ export class SendGuard {
 
   onClick(target: unknown): Verdict {
     if (this.pressing) return 'pass';
-    if (this.page.isSendButton(target)) return this.check();
+    if (this.page.isSendButton(target)) return this.waiting ? 'stop' : this.check();
     if (this.page.looksLikeSend(target) && !this.page.composer()) return this.refuse(NO_BOX);
     return 'pass';
   }
@@ -125,32 +132,68 @@ export class SendGuard {
     this.cleared = null;
     const p = this.protect(text);
     if (p.hidden.length === 0) return this.go({ text, hidden: [], counts: {}, asWritten: false });
-    if (!box.write(p.text) || tidy(box.read()) !== tidy(p.text)) {
+    this.put(box, p.text, () => this.ready(text, p), () => {
       // The box may now hold neither text. Put back what the person wrote, and send nothing.
       box.write(text);
-      return this.refuse(NOT_TAKEN);
-    }
+      this.ui.warn(NOT_TAKEN);
+    });
+    return 'stop';
+  }
+
+  /**
+   * Give the box `text` and wait, briefly, until it shows it. Editors such as
+   * Lexical draw new text a moment later; the press was already stopped, so
+   * waiting costs nothing. When the box shows it at once, `then` runs before
+   * this returns.
+   */
+  private put(box: Composer, text: string, then: () => void, fail: () => void): void {
+    const shows = (): boolean => tidy(box.read()) === tidy(text);
+    if (!box.write(text)) return fail();
+    if (shows()) return then();
+    this.waiting = true;
+    const started = Date.now();
+    const poll = (): void => {
+      if (shows()) {
+        this.waiting = false;
+        then();
+      } else if (Date.now() - started >= SETTLE_MS) {
+        this.waiting = false;
+        fail();
+      } else {
+        setTimeout(poll, STEP_MS);
+      }
+    };
+    setTimeout(poll, STEP_MS);
+  }
+
+  /** The box holds the protected text: ask, or send at once when the company does not ask. */
+  private ready(text: string, p: Protected): void {
     const sent: Sent = { text: p.text, hidden: p.hidden, counts: p.counts, asWritten: false };
     this.cleared = { text: p.text, sent };
     if (!this.opts.confirmBeforeSend) {
       this.press();
       this.ui.notice(p.hidden);
-      return 'stop';
+      return;
     }
     this.ui.review(p.hidden, {
       send: () => this.press(),
       ...(this.opts.allowSendAsWritten ? { asWritten: () => this.sendAsWritten(text, p) } : {}),
       cancel: () => this.ui.close(),
     });
-    return 'stop';
   }
 
   private sendAsWritten(original: string, p: Protected): void {
     const box = this.page.composer();
     if (!box) return void this.refuse(NO_BOX);
-    if (!box.write(original)) return void this.refuse(NOT_TAKEN);
-    this.cleared = { text: original, sent: { text: original, hidden: p.hidden, counts: p.counts, asWritten: true } };
-    this.press();
+    this.put(
+      box,
+      original,
+      () => {
+        this.cleared = { text: original, sent: { text: original, hidden: p.hidden, counts: p.counts, asWritten: true } };
+        this.press();
+      },
+      () => this.ui.warn(NOT_TAKEN),
+    );
   }
 
   /** Press the site's own send button, letting that one press through. */

@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import { canonical as nodeCanonical } from '../src/crypto.ts';
 import { verifyDisclosure, verifyLedger } from '../src/ledger.ts';
 import type { LedgerEntry, SignedDisclosure } from '../src/types.ts';
-import { NO_BOX, NO_BUTTON, NOT_TAKEN, SendGuard, type Choices, type Page, type Sent, type Ui } from '../extension/src/guard.ts';
+import { NO_BOX, NO_BUTTON, NOT_TAKEN, SETTLE_MS, SendGuard, type Choices, type Page, type Sent, type Ui } from '../extension/src/guard.ts';
 import { DEFAULT_POLICY, mergePolicy, readPolicy } from '../extension/src/policy.ts';
 import { mergeTable, pieces, protect, restore, type Entry, type Hidden } from '../extension/src/protect.ts';
 import { canonical, chain, newSigner, signSend } from '../extension/src/receipt.ts';
@@ -116,7 +116,11 @@ describe('restore on screen', () => {
 });
 
 /** A chat page made of plain objects, recording what happened to it. */
-function fakePage(initial: string, opts: { box?: boolean; takes?: boolean; button?: boolean } = {}) {
+/**
+ * `lag`: the box draws new text that many ms later and adds zero width marks,
+ * as Copilot's Lexical editor does. `never`: it accepts text and never shows it.
+ */
+function fakePage(initial: string, opts: { box?: boolean; takes?: boolean; button?: boolean; lag?: number; never?: boolean } = {}) {
   const state = { text: initial, box: opts.box ?? true, takes: opts.takes ?? true, button: opts.button ?? true, clicks: 0, sentText: [] as string[] };
   let guard: SendGuard | null = null;
   const page: Page = {
@@ -129,7 +133,9 @@ function fakePage(initial: string, opts: { box?: boolean; takes?: boolean; butto
                 state.text = '';
                 return false;
               }
-              state.text = t;
+              if (opts.never && t !== initial) return true;
+              if (opts.lag !== undefined && t !== initial) setTimeout(() => (state.text = `${t}\u200B\u200C`), opts.lag);
+              else state.text = t;
               return true;
             },
           }
@@ -304,6 +310,29 @@ describe('the send hook', () => {
     assert.equal(s.sent.length, 1);
     assert.ok(!s.sent[0]!.text.includes('Sami'));
   });
+
+  it('waits for an editor that draws the text a moment later, holding every press meanwhile (Copilot)', async () => {
+    const s = setup(MSG, { lag: 60 });
+    assert.equal(s.enter(), 'stop');
+    assert.equal(s.log.reviews.length, 0, 'no panel before the box shows the protected text');
+    assert.equal(s.enter(), 'stop', 'a second press while waiting must not send what is still in the box');
+    assert.equal(s.guard.onClick('send'), 'stop');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.deepEqual(s.log.warnings, []);
+    assert.equal(s.log.reviews.length, 1);
+    for (const v of SECRETS) assert.ok(!s.state.text.includes(v), s.state.text);
+    assert.equal(s.enter(), 'pass', 'the zero width marks the editor added do not count as a change');
+    assert.equal(s.sent.length, 1);
+  });
+
+  it('gives up and sends nothing when the editor never shows the protected text', async () => {
+    const s = setup(MSG, { never: true });
+    assert.equal(s.enter(), 'stop');
+    await new Promise((r) => setTimeout(r, SETTLE_MS + 150));
+    assert.deepEqual(s.log.warnings, [NOT_TAKEN]);
+    assert.equal(s.log.reviews.length, 0);
+    assert.equal(s.sent.length, 0);
+  });
 });
 
 describe('receipts', () => {
@@ -358,6 +387,7 @@ describe('policy and sites', () => {
     assert.equal(siteFor('chatgpt.com', '/c/1', all)?.id, 'chatgpt');
     assert.equal(siteFor('copilot.microsoft.com', '/', all)?.id, 'copilot');
     assert.equal(siteFor('copilot.com', '/chats/1', all)?.id, 'copilot', 'copilot.microsoft.com now redirects here');
+    assert.equal(siteFor('copilot.com', '/chat', all)?.id, 'copilot');
     assert.equal(siteFor('gemini.google.com', '/app', all)?.id, 'gemini');
     assert.equal(siteFor('chatgpt.com', '/', ['gemini']), null);
     assert.equal(siteFor('127.0.0.1', '/noai-extension-test/', all)?.id, 'local-test');

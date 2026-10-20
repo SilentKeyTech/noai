@@ -66,9 +66,13 @@ function readBox(el: HTMLElement): string {
   return el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement ? el.value : el.innerText;
 }
 
-const tidy = (s: string): string => s.replace(/\s+/g, ' ').trim();
+const tidy = (s: string): string => s.replace(/[\u200B-\u200F\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
 
-/** Replace the box's text the way typing would, so the site's editor sees the change. */
+/**
+ * Replace the box's text the way typing would, so the site's editor sees the
+ * change. A textarea shows it at once; a rich editor such as Lexical draws it
+ * a moment later, and the guard waits for that before it trusts the box.
+ */
 function writeBox(el: HTMLElement, text: string): boolean {
   el.focus();
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
@@ -81,13 +85,12 @@ function writeBox(el: HTMLElement, text: string): boolean {
     sel?.addRange(range);
   }
   // execCommand is deprecated but is still the one way to type into ProseMirror, Quill and React textareas alike.
-  document.execCommand('insertText', false, text);
+  const took = document.execCommand('insertText', false, text);
+  if (!(el instanceof HTMLTextAreaElement)) return took;
   if (tidy(readBox(el)) === tidy(text)) return true;
-  if (el instanceof HTMLTextAreaElement) {
-    const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-    set?.call(el, text);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  }
+  const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  set?.call(el, text);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
   return tidy(readBox(el)) === tidy(text);
 }
 
