@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "sites": { "type": "array", "items": { "type": "string" }, "description": "Covered sites: chatgpt, copilot, gemini, local-test." },
+    "alwaysHide": { "type": "array", "items": { "type": "string" }, "description": "Words always hidden: client names, project code names." },
+    "people": { "type": "array", "items": { "type": "string" }, "description": "People always hidden, in any script." },
+    "confirmBeforeSend": { "type": "boolean", "description": "Show the panel and wait for a second press before sending." },
+    "allowSendAsWritten": { "type": "boolean", "description": "Offer 'Undo, send as written'." },
+    "restoreOnScreen": { "type": "boolean", "description": "Put real values back in the page, on screen only." },
+    "receipts": { "type": "boolean", "description": "Sign a receipt for every message sent." },
+    "keepDays": { "type": "integer", "description": "Days a placeholder and its value are kept for restoring. 0 keeps them until forgotten by hand." },
+    "staffLabel": { "type": "string", "description": "Who this browser belongs to, written into each receipt." }
+  }
+}

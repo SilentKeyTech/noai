@@ -1,0 +1,11 @@
+{
+  "sites": ["chatgpt", "copilot", "gemini", "local-test"],
+  "alwaysHide": [],
+  "people": [],
+  "confirmBeforeSend": true,
+  "allowSendAsWritten": true,
+  "restoreOnScreen": true,
+  "receipts": true,
+  "keepDays": 30,
+  "staffLabel": ""
+}
