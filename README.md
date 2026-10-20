@@ -232,7 +232,9 @@ When someone presses Enter or the send button on chatgpt.com, copilot.microsoft.
 1. The extension runs NOAI's own redaction (`src/redact.ts`, the same code the gateway uses) on the text, on the computer.
 2. If it finds anything, it stops that press, puts the text with placeholders such as `[PERSON_1]` and `[PHONE_1]` in the chat box, and shows a small panel listing what was hidden, with **Send protected** and **Undo, send as written**.
 3. A second press (Enter, the site's button, or Send protected) sends the text with placeholders.
-4. In the answer, the extension draws the real values over the placeholders on screen only. The values are drawn inside closed shadow roots, so the website's own scripts still read `[PERSON_1]`.
+4. In the answer, the extension draws the real values over the placeholders on screen only, each with a soft orange highlight and a small lock, so nobody mistakes a value put back on screen for a value that was sent. They are drawn inside closed shadow roots, so the website's own scripts still read `[PERSON_1]`.
+
+A protected message ends with one line, in the gateway's own words, telling the AI that the bracketed values are deliberate placeholders to use as written. Without it, Copilot read `[PERSON_1]` as suspicious personal data and refused to draft the reply. A company can turn the line off with `placeholderNote: false`.
 
 A placeholder keeps its number across messages, so a name hidden in the first message is the same `[PERSON_1]` in the tenth, and a name hidden once is hidden again when it comes back alone. The table of placeholders and real values stays in the browser's extension storage on that computer, for `keepDays` days (30 by default), and the popup can forget it at once.
 
