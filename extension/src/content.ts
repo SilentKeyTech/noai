@@ -38,13 +38,29 @@ const ask = <T,>(msg: unknown): Promise<T> => chrome.runtime.sendMessage(msg) as
 
 const isElement = (x: unknown): x is Element => x instanceof Element;
 const asElement = (x: unknown): Element | null => (isElement(x) ? x : x instanceof Node ? x.parentElement : null);
+/** every open shadow root under `root`, so a chat box drawn inside a web component is still found */
+function shadowRoots(root: ParentNode): ShadowRoot[] {
+  const out: ShadowRoot[] = [];
+  for (const el of root.querySelectorAll('*')) {
+    if (el.shadowRoot) out.push(el.shadowRoot, ...shadowRoots(el.shadowRoot));
+  }
+  return out;
+}
 const first = (selectors: string[], root: ParentNode = document): HTMLElement | null => {
   for (const s of selectors) {
     const el = root.querySelector<HTMLElement>(s);
     if (el) return el;
   }
+  for (const sr of shadowRoots(root)) {
+    for (const s of selectors) {
+      const el = sr.querySelector<HTMLElement>(s);
+      if (el) return el;
+    }
+  }
   return null;
 };
+/** the element an event really started on: inside a shadow root, e.target is only its host */
+const origin = (e: Event): EventTarget | null => e.composedPath()[0] ?? e.target;
 
 function readBox(el: HTMLElement): string {
   return el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement ? el.value : el.innerText;
@@ -339,9 +355,11 @@ async function start(): Promise<void> {
     policy,
   );
   window.__noaiGuard = {
-    key: (e) => guard.onKey(e),
-    click: (e) => guard.onClick(e.target),
+    key: (e) => guard.onKey({ key: e.key, shiftKey: e.shiftKey, isComposing: e.isComposing, target: origin(e) }),
+    click: (e) => guard.onClick(origin(e)),
   };
+  // the toolbar icon says ON on every tab the extension is protecting, so a page it does not cover is visible
+  void ask({ type: 'active' });
 }
 
 void start().catch((e: unknown) => {
@@ -358,6 +376,6 @@ void start().catch((e: unknown) => {
   };
   window.__noaiGuard = {
     key: (e) => (e.key === 'Enter' && !e.shiftKey && !e.isComposing ? stop() : 'pass'),
-    click: (e) => (sendLike(e.target) ? stop() : 'pass'),
+    click: (e) => (sendLike(origin(e)) ? stop() : 'pass'),
   };
 });
