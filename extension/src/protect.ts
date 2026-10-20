@@ -73,7 +73,21 @@ function hideTerms(text: string, terms: string[]): { text: string; map: Map<stri
  * browser has used before. Pure: nothing is stored here, the caller saves
  * `touched`.
  */
-export function protect(text: string, table: readonly Entry[], policy: Pick<Policy, 'alwaysHide' | 'people'>, now = new Date()): Protected {
+/**
+ * Added under a message that had something hidden, so the model treats the
+ * placeholders as deliberate instead of as missing or suspicious data. Same
+ * wording as the gateway's system line (src/gate.ts). Its example has no
+ * number, so it is never mistaken for a real placeholder or drawn over.
+ */
+export const PLACEHOLDER_NOTE =
+  '(Note: values in square brackets with a number, like [PERSON_n] or [PHONE_n], are placeholders for private data hidden on my computer by NOAI+. They are deliberate. Use them exactly as written, never guess what they stand for.)';
+
+export function protect(
+  text: string,
+  table: readonly Entry[],
+  policy: Pick<Policy, 'alwaysHide' | 'people'> & { note?: string },
+  now = new Date(),
+): Protected {
   // 1. company words, then everything redact.ts finds. Names hidden in earlier
   //    messages are hidden again, so a name found once by its cue word ("my
   //    brother Sami") is still hidden when it comes back alone ("Sami agreed").
@@ -114,7 +128,8 @@ export function protect(text: string, table: readonly Entry[], policy: Pick<Poli
     hidden.push({ ph: entry.ph, value, kind });
     counts[kind] = (counts[kind] ?? 0) + 1;
   }
-  const out = r.text.replace(PLACEHOLDER, (ph) => rename.get(ph) ?? ph);
+  let out = r.text.replace(PLACEHOLDER, (ph) => rename.get(ph) ?? ph);
+  if (hidden.length > 0 && policy.note && !out.includes(policy.note)) out = `${out}\n\n${policy.note}`;
   return { text: out, hidden, counts, touched };
 }
 

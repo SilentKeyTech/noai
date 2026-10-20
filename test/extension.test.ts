@@ -11,7 +11,7 @@ import { verifyDisclosure, verifyLedger } from '../src/ledger.ts';
 import type { LedgerEntry, SignedDisclosure } from '../src/types.ts';
 import { NO_BOX, NO_BUTTON, NOT_TAKEN, SETTLE_MS, SendGuard, type Choices, type Page, type Sent, type Ui } from '../extension/src/guard.ts';
 import { DEFAULT_POLICY, mergePolicy, readPolicy } from '../extension/src/policy.ts';
-import { mergeTable, pieces, protect, restore, type Entry, type Hidden } from '../extension/src/protect.ts';
+import { mergeTable, PLACEHOLDER_NOTE, pieces, protect, restore, type Entry, type Hidden } from '../extension/src/protect.ts';
 import { canonical, chain, newSigner, signSend } from '../extension/src/receipt.ts';
 import { SITES, siteFor } from '../extension/src/sites.ts';
 
@@ -78,6 +78,17 @@ describe('redact before send', () => {
     assert.ok(p.text.startsWith('Template uses [PERSON_1];'));
     assert.ok(!p.hidden.some((h) => h.ph === '[PERSON_1]'), JSON.stringify(p.hidden));
     assert.ok(!p.text.includes('Sami'));
+  });
+
+  it('tells the model, once, that the placeholders are deliberate, and only when something was hidden', () => {
+    const withNote = { alwaysHide: [], people: [], note: PLACEHOLDER_NOTE };
+    const p = protect(MSG, [], withNote);
+    assert.ok(p.text.endsWith(PLACEHOLDER_NOTE), p.text);
+    assert.equal(protect(p.text, mergeTable([], p.touched, 30), withNote).text.split(PLACEHOLDER_NOTE).length, 2, 'protecting again does not add a second note');
+    assert.equal(protect('What is the capital of Norway?', [], withNote).text, 'What is the capital of Norway?');
+    assert.equal(pieces(PLACEHOLDER_NOTE, lookup(p.touched)), null, 'the note is never drawn over with a real value');
+    assert.ok(!/\[[A-Z]+_\d+\]/.test(PLACEHOLDER_NOTE));
+    assert.equal(DEFAULT_POLICY.placeholderNote, true);
   });
 
   it('forgets values older than keepDays, keeps the first value when two tabs race for one placeholder', () => {

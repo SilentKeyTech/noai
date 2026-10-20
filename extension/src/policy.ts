@@ -25,6 +25,8 @@ export interface Policy {
   keepDays: number;
   /** who this browser belongs to, written into each receipt, e.g. a staff id */
   staffLabel: string;
+  /** add one line under a protected message telling the model the placeholders are deliberate */
+  placeholderNote: boolean;
 }
 
 export const DEFAULT_POLICY: Readonly<Policy> = Object.freeze({
@@ -37,6 +39,7 @@ export const DEFAULT_POLICY: Readonly<Policy> = Object.freeze({
   receipts: true,
   keepDays: 30,
   staffLabel: '',
+  placeholderNote: true,
 });
 
 const strings = (v: unknown): string[] | null =>
@@ -53,7 +56,7 @@ export function readPolicy(raw: unknown, base: Readonly<Policy> = DEFAULT_POLICY
   if (hide) p.alwaysHide = hide;
   const people = strings(r['people']);
   if (people) p.people = people;
-  for (const k of ['confirmBeforeSend', 'allowSendAsWritten', 'restoreOnScreen', 'receipts'] as const) {
+  for (const k of ['confirmBeforeSend', 'allowSendAsWritten', 'restoreOnScreen', 'receipts', 'placeholderNote'] as const) {
     if (typeof r[k] === 'boolean') p[k] = r[k];
   }
   if (typeof r['keepDays'] === 'number' && Number.isFinite(r['keepDays']) && r['keepDays'] >= 0) p.keepDays = r['keepDays'];

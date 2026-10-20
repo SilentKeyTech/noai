@@ -1,5 +1,10 @@
 {
-  "sites": ["chatgpt", "copilot", "gemini", "local-test"],
+  "sites": [
+    "chatgpt",
+    "copilot",
+    "gemini",
+    "local-test"
+  ],
   "alwaysHide": [],
   "people": [],
   "confirmBeforeSend": true,
@@ -7,5 +12,6 @@
   "restoreOnScreen": true,
   "receipts": true,
   "keepDays": 30,
-  "staffLabel": ""
+  "staffLabel": "",
+  "placeholderNote": true
 }

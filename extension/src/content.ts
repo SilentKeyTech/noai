@@ -7,8 +7,8 @@
  * still read the placeholder.
  */
 import { SendGuard, type Choices, type Composer, type Page, type Sent, type Ui, type Verdict } from './guard.ts';
-import type { Policy } from './policy.ts';
-import { mergeTable, pieces, protect, type Entry, type Hidden } from './protect.ts';
+import { readPolicy } from './policy.ts';
+import { mergeTable, PLACEHOLDER_NOTE, pieces, protect, type Entry, type Hidden } from './protect.ts';
 import { siteFor, type SiteDef } from './sites.ts';
 
 declare global {
@@ -212,7 +212,37 @@ button:focus-visible, .x:focus-visible { outline: 2px solid #9A3412; outline-off
 .hint { font-size: 12px; opacity: .65; margin: 10px 0 0; }
 `;
 
-function makeUi(): Ui {
+/**
+ * Keep the panel clear of the chat box and its send button: right above the
+ * box when there is room, else in the top right corner.
+ */
+function place(card: HTMLElement, anchor: Element | null): void {
+  const r = anchor?.getBoundingClientRect();
+  if (!r || r.width === 0) return;
+  const room = r.top - 16;
+  if (room >= 220) {
+    card.style.bottom = `${String(Math.round(window.innerHeight - r.top + 12))}px`;
+    card.style.right = `${String(Math.max(16, Math.round(window.innerWidth - r.right)))}px`;
+    card.style.maxHeight = `${String(Math.round(room - 12))}px`;
+  } else {
+    card.style.bottom = 'auto';
+    card.style.top = '16px';
+  }
+  card.style.overflow = 'auto';
+}
+
+/** the visible frame around a chat box: the box itself sits inside it, a little lower */
+function frameOf(box: Element | null): Element | null {
+  let el = box;
+  for (let i = 0; i < 5 && el?.parentElement; i++) {
+    const r = el.parentElement.getBoundingClientRect();
+    if (r.height > 320 || r.width > window.innerWidth * 0.98) break;
+    el = el.parentElement;
+  }
+  return el;
+}
+
+function makeUi(anchor: () => Element | null = () => null): Ui {
   let host: HTMLElement | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const close = (): void => {
@@ -233,6 +263,7 @@ function makeUi(): Ui {
     build(card);
     root.append(style, card);
     document.documentElement.append(host);
+    place(card, anchor());
   };
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, cls?: string): HTMLElementTagNameMap[K] => {
     const e = document.createElement(tag);
@@ -316,11 +347,30 @@ function makeRestorer(site: SiteDef, table: () => ReadonlyMap<string, string>, s
     // The page's scripts read the placeholder here; with no slot in the shadow root it is never drawn.
     host.textContent = ph;
     const root = host.attachShadow({ mode: 'closed' });
+    // A soft orange mark with a lock, so nobody reads a value put back on screen as a value that was sent.
+    const style = document.createElement('style');
+    style.textContent = `
+      .v { background: rgba(242, 92, 5, .18); box-shadow: inset 0 0 0 1px rgba(242, 92, 5, .45); border-radius: 5px;
+        padding: 0 4px 0 3px; white-space: nowrap; cursor: help; }
+      svg { width: .78em; height: .78em; margin-right: 3px; vertical-align: -.04em; stroke: #F25C05; fill: none;
+        stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }`;
     const span = document.createElement('span');
-    span.textContent = value;
-    span.title = `Shown by NOAI+ on this computer only. The website has ${ph}.`;
-    span.style.cssText = 'text-decoration: underline dotted #F25C05; text-underline-offset: 3px;';
-    root.append(span);
+    span.className = 'v';
+    span.title = `Shown by NOAI+ on this computer only. The website received ${ph}, not this.`;
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const lock = document.createElementNS(svgNs, 'svg');
+    lock.setAttribute('viewBox', '0 0 24 24');
+    lock.setAttribute('aria-hidden', 'true');
+    for (const [tag, attrs] of [
+      ['rect', { x: '4', y: '10.5', width: '16', height: '11', rx: '2.5' }],
+      ['path', { d: 'M8 10.5V7a4 4 0 0 1 8 0v3.5' }],
+    ] as const) {
+      const shape = document.createElementNS(svgNs, tag);
+      for (const [k, v] of Object.entries(attrs)) shape.setAttribute(k, v);
+      lock.append(shape);
+    }
+    span.append(lock, document.createTextNode(value));
+    root.append(style, span);
     return host;
   };
 
@@ -371,8 +421,10 @@ function makeRestorer(site: SiteDef, table: () => ReadonlyMap<string, string>, s
 // ---------- start ----------
 
 async function start(): Promise<void> {
-  const policy = await ask<Policy>({ type: 'policy' });
-  if ('error' in policy) throw new Error(String(policy.error));
+  const answer = await ask<Record<string, unknown>>({ type: 'policy' });
+  if ('error' in answer) throw new Error(String(answer['error']));
+  // read again with the defaults, so a field an older service worker does not know yet still gets its safe value
+  const policy = readPolicy(answer);
   const site = siteFor(location.hostname, location.pathname, policy.sites);
   if (!site) {
     // Not covered by the company's policy: step aside entirely.
@@ -393,9 +445,9 @@ async function start(): Promise<void> {
 
   const guard = new SendGuard(
     makePage(site),
-    makeUi(),
+    makeUi(() => frameOf(first(site.composer))),
     (text) => {
-      const p = protect(text, table, policy);
+      const p = protect(text, table, { ...policy, ...(policy.placeholderNote ? { note: PLACEHOLDER_NOTE } : {}) });
       if (p.touched.length) {
         table = mergeTable(table, p.touched, policy.keepDays);
         lookup = new Map(table.map((e) => [e.ph, e.value]));
