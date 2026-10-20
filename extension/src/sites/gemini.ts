@@ -1,5 +1,6 @@
 import type { SiteDef } from './types.ts';
 
+/** Checked against gemini.google.com, logged out, on 20 Oct 2026: a Quill editor in rich-textarea and a "Send message" button that appears once there is text. */
 export const gemini: SiteDef = {
   id: 'gemini',
   name: 'Google Gemini',
