@@ -7,8 +7,8 @@
  * still read the placeholder.
  */
 import { SendGuard, type Choices, type Composer, type Page, type Sent, type Ui, type Verdict } from './guard.ts';
-import type { Policy } from './policy.ts';
-import { mergeTable, pieces, protect, type Entry, type Hidden } from './protect.ts';
+import { mergePolicy, readPolicy, type Policy } from './policy.ts';
+import { mergeTable, PLACEHOLDER_NOTE, pieces, protect, type Entry, type Hidden } from './protect.ts';
 import { siteFor, type SiteDef } from './sites.ts';
 
 declare global {
@@ -66,28 +66,82 @@ function readBox(el: HTMLElement): string {
   return el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement ? el.value : el.innerText;
 }
 
-const tidy = (s: string): string => s.replace(/\s+/g, ' ').trim();
+const tidy = (s: string): string => s.replace(/[\u200B-\u200F\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
 
-/** Replace the box's text the way typing would, so the site's editor sees the change. */
-function writeBox(el: HTMLElement, text: string): boolean {
+/**
+ * Replace the box's text the way typing would, so the site's editor sees the
+ * change. A textarea shows it at once; a rich editor such as Lexical draws it
+ * a moment later, and the guard waits for that before it trusts the box.
+ */
+function selectAllIn(el: HTMLElement): void {
   el.focus();
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
     el.select();
-  } else {
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    const sel = getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
+    return;
   }
-  // execCommand is deprecated but is still the one way to type into ProseMirror, Quill and React textareas alike.
+  // selectAll goes through the editor's own command; the range is a fallback for editors that ignore it
+  document.execCommand('selectAll');
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+}
+
+/**
+ * Put `text` over the selection in a rich editor. Lexical (Copilot) ignores
+ * insertText sent from an extension's isolated world but takes a paste, and
+ * ProseMirror and Quill take one too; a plain contenteditable that does not
+ * handle paste gets insertText instead.
+ */
+function pasteOrType(el: HTMLElement, text: string): boolean {
+  const data = new DataTransfer();
+  data.setData('text/plain', text);
+  const paste = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true });
+  el.dispatchEvent(paste);
+  if (paste.defaultPrevented) return true;
+  // execCommand is deprecated but is still the way to type into a plain contenteditable or a React textarea.
+  return document.execCommand('insertText', false, text);
+}
+
+/**
+ * Lexical reads a new selection a moment after it is made (on selectionchange),
+ * so a paste sent in the same instant lands at the old caret and adds to the
+ * text instead of replacing it. Select, wait, then paste.
+ */
+const SELECT_WAIT_MS = 50;
+/** if the box still shows exactly what it showed before, the editor missed it: select and paste again */
+const RETRY_MS = [300, 600];
+/** only the latest write to a box acts, so a late step never puts back text the guard has since replaced */
+const writes = new WeakMap<HTMLElement, number>();
+
+function writeBox(el: HTMLElement, text: string): boolean {
+  const n = (writes.get(el) ?? 0) + 1;
+  writes.set(el, n);
+  if (!(el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement)) {
+    const before = tidy(readBox(el));
+    const latest = (): boolean => writes.get(el) === n && el.isConnected;
+    const replace = (): void => {
+      selectAllIn(el);
+      setTimeout(() => {
+        if (latest()) pasteOrType(el, text);
+      }, SELECT_WAIT_MS);
+    };
+    replace();
+    for (const ms of RETRY_MS) {
+      setTimeout(() => {
+        // retry only when nothing happened at all; a box that changed is left for the guard to judge
+        if (latest() && tidy(readBox(el)) === before && before !== tidy(text)) replace();
+      }, ms);
+    }
+    return true;
+  }
+  selectAllIn(el);
   document.execCommand('insertText', false, text);
   if (tidy(readBox(el)) === tidy(text)) return true;
-  if (el instanceof HTMLTextAreaElement) {
-    const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-    set?.call(el, text);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  }
+  const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el) as object, 'value')?.set;
+  set?.call(el, text);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
   return tidy(readBox(el)) === tidy(text);
 }
 
@@ -158,7 +212,37 @@ button:focus-visible, .x:focus-visible { outline: 2px solid #9A3412; outline-off
 .hint { font-size: 12px; opacity: .65; margin: 10px 0 0; }
 `;
 
-function makeUi(): Ui {
+/**
+ * Keep the panel clear of the chat box and its send button: right above the
+ * box when there is room, else in the top right corner.
+ */
+function place(card: HTMLElement, anchor: Element | null): void {
+  const r = anchor?.getBoundingClientRect();
+  if (!r || r.width === 0) return;
+  const room = r.top - 16;
+  if (room >= 220) {
+    card.style.bottom = `${String(Math.round(window.innerHeight - r.top + 12))}px`;
+    card.style.right = `${String(Math.max(16, Math.round(window.innerWidth - r.right)))}px`;
+    card.style.maxHeight = `${String(Math.round(room - 12))}px`;
+  } else {
+    card.style.bottom = 'auto';
+    card.style.top = '16px';
+  }
+  card.style.overflow = 'auto';
+}
+
+/** the visible frame around a chat box: the box itself sits inside it, a little lower */
+function frameOf(box: Element | null): Element | null {
+  let el = box;
+  for (let i = 0; i < 5 && el?.parentElement; i++) {
+    const r = el.parentElement.getBoundingClientRect();
+    if (r.height > 320 || r.width > window.innerWidth * 0.98) break;
+    el = el.parentElement;
+  }
+  return el;
+}
+
+function makeUi(anchor: () => Element | null = () => null): Ui {
   let host: HTMLElement | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const close = (): void => {
@@ -179,6 +263,7 @@ function makeUi(): Ui {
     build(card);
     root.append(style, card);
     document.documentElement.append(host);
+    place(card, anchor());
   };
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, cls?: string): HTMLElementTagNameMap[K] => {
     const e = document.createElement(tag);
@@ -262,11 +347,30 @@ function makeRestorer(site: SiteDef, table: () => ReadonlyMap<string, string>, s
     // The page's scripts read the placeholder here; with no slot in the shadow root it is never drawn.
     host.textContent = ph;
     const root = host.attachShadow({ mode: 'closed' });
+    // A soft orange mark with a lock, so nobody reads a value put back on screen as a value that was sent.
+    const style = document.createElement('style');
+    style.textContent = `
+      .v { background: rgba(242, 92, 5, .18); box-shadow: inset 0 0 0 1px rgba(242, 92, 5, .45); border-radius: 5px;
+        padding: 0 4px 0 3px; white-space: nowrap; cursor: help; }
+      svg { width: .78em; height: .78em; margin-right: 3px; vertical-align: -.04em; stroke: #F25C05; fill: none;
+        stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }`;
     const span = document.createElement('span');
-    span.textContent = value;
-    span.title = `Shown by NOAI+ on this computer only. The website has ${ph}.`;
-    span.style.cssText = 'text-decoration: underline dotted #F25C05; text-underline-offset: 3px;';
-    root.append(span);
+    span.className = 'v';
+    span.title = `Shown by NOAI+ on this computer only. The website received ${ph}, not this.`;
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const lock = document.createElementNS(svgNs, 'svg');
+    lock.setAttribute('viewBox', '0 0 24 24');
+    lock.setAttribute('aria-hidden', 'true');
+    for (const [tag, attrs] of [
+      ['rect', { x: '4', y: '10.5', width: '16', height: '11', rx: '2.5' }],
+      ['path', { d: 'M8 10.5V7a4 4 0 0 1 8 0v3.5' }],
+    ] as const) {
+      const shape = document.createElementNS(svgNs, tag);
+      for (const [k, v] of Object.entries(attrs)) shape.setAttribute(k, v);
+      lock.append(shape);
+    }
+    span.append(lock, document.createTextNode(value));
+    root.append(style, span);
     return host;
   };
 
@@ -316,9 +420,26 @@ function makeRestorer(site: SiteDef, table: () => ReadonlyMap<string, string>, s
 
 // ---------- start ----------
 
+const within = <T,>(p: Promise<T>, ms: number): Promise<T | null> =>
+  Promise.race([p.catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), ms))]);
+
+/**
+ * The company policy. Asked of the service worker first; a worker that is
+ * slow to wake or stuck must not leave the page with its presses stopped and
+ * no word why, so after a short wait the policy is read here directly, from
+ * the packed file and the enterprise policy.
+ */
+async function loadPolicy(): Promise<Policy> {
+  const answer = await within(ask<Record<string, unknown>>({ type: 'policy' }), 2500);
+  // read again with the defaults, so a field an older service worker does not know yet still gets its safe value
+  if (answer && !('error' in answer)) return readPolicy(answer);
+  const packed = await within(fetch(chrome.runtime.getURL('policy.json')).then((r) => r.json() as Promise<unknown>), 2000);
+  const managed = await within(chrome.storage.managed.get(null) as Promise<unknown>, 1000);
+  return mergePolicy(packed, managed);
+}
+
 async function start(): Promise<void> {
-  const policy = await ask<Policy>({ type: 'policy' });
-  if ('error' in policy) throw new Error(String(policy.error));
+  const policy = await loadPolicy();
   const site = siteFor(location.hostname, location.pathname, policy.sites);
   if (!site) {
     // Not covered by the company's policy: step aside entirely.
@@ -339,9 +460,9 @@ async function start(): Promise<void> {
 
   const guard = new SendGuard(
     makePage(site),
-    makeUi(),
+    makeUi(() => frameOf(first(site.composer))),
     (text) => {
-      const p = protect(text, table, policy);
+      const p = protect(text, table, { ...policy, ...(policy.placeholderNote ? { note: PLACEHOLDER_NOTE } : {}) });
       if (p.touched.length) {
         table = mergeTable(table, p.touched, policy.keepDays);
         lookup = new Map(table.map((e) => [e.ph, e.value]));

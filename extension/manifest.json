@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "NOAI+ for chat sites",
   "short_name": "NOAI+",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "description": "Hides names, numbers and IDs on this computer before you send to ChatGPT, Copilot or Gemini, and puts them back in the answer on your screen.",
   "minimum_chrome_version": "137",
   "permissions": ["storage"],
@@ -28,7 +28,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["lib/*", "tenor-sans.woff2"],
+      "resources": ["lib/*", "tenor-sans.woff2", "policy.json"],
       "matches": [
         "https://chatgpt.com/*",
         "https://chat.openai.com/*",
