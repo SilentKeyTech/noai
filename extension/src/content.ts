@@ -7,7 +7,7 @@
  * still read the placeholder.
  */
 import { SendGuard, type Choices, type Composer, type Page, type Sent, type Ui, type Verdict } from './guard.ts';
-import { readPolicy } from './policy.ts';
+import { mergePolicy, readPolicy, type Policy } from './policy.ts';
 import { mergeTable, PLACEHOLDER_NOTE, pieces, protect, type Entry, type Hidden } from './protect.ts';
 import { siteFor, type SiteDef } from './sites.ts';
 
@@ -420,11 +420,26 @@ function makeRestorer(site: SiteDef, table: () => ReadonlyMap<string, string>, s
 
 // ---------- start ----------
 
-async function start(): Promise<void> {
-  const answer = await ask<Record<string, unknown>>({ type: 'policy' });
-  if ('error' in answer) throw new Error(String(answer['error']));
+const within = <T,>(p: Promise<T>, ms: number): Promise<T | null> =>
+  Promise.race([p.catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), ms))]);
+
+/**
+ * The company policy. Asked of the service worker first; a worker that is
+ * slow to wake or stuck must not leave the page with its presses stopped and
+ * no word why, so after a short wait the policy is read here directly, from
+ * the packed file and the enterprise policy.
+ */
+async function loadPolicy(): Promise<Policy> {
+  const answer = await within(ask<Record<string, unknown>>({ type: 'policy' }), 2500);
   // read again with the defaults, so a field an older service worker does not know yet still gets its safe value
-  const policy = readPolicy(answer);
+  if (answer && !('error' in answer)) return readPolicy(answer);
+  const packed = await within(fetch(chrome.runtime.getURL('policy.json')).then((r) => r.json() as Promise<unknown>), 2000);
+  const managed = await within(chrome.storage.managed.get(null) as Promise<unknown>, 1000);
+  return mergePolicy(packed, managed);
+}
+
+async function start(): Promise<void> {
+  const policy = await loadPolicy();
   const site = siteFor(location.hostname, location.pathname, policy.sites);
   if (!site) {
     // Not covered by the company's policy: step aside entirely.
